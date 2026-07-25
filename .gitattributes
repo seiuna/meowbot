@@ -1,0 +1,12 @@
+# Auto detect text files and use LF on checkin, keep native on checkout
+* text=auto
+
+# Shell scripts should always use LF
+*.sh text eol=lf
+
+# Batch files should always use CRLF
+*.bat text eol=crlf
+*.cmd text eol=crlf
+
+# Lock files are binary
+pnpm-lock.yaml -diff
