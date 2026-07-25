@@ -33,7 +33,7 @@ export interface LoadedTemplate {
 function parseFrontmatter(raw: string): { meta: Record<string, string>; body: string } {
     const meta: Record<string, string> = {};
     let body = raw;
-    const normalized = raw.replace(/\r\n/g, "\n");
+    const normalized = raw.replace(/\r\n/g, "\n").replace(/^\uFEFF/, "");
 
     if (normalized.startsWith("---\n")) {
         const endIdx = normalized.indexOf("\n---\n", 4);

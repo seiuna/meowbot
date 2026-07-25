@@ -6,6 +6,7 @@ import { ModelRegistry } from "@meowbot/llm/provider_registry";
 import { toolRegistry, ToolRegistry } from "@meowbot/tools/tool_registry";
 import { getLogger } from "@meowbot/utils/logs";
 import { Prompts } from "@meowbot/template/prompts";
+import { getPromptContext } from "@meowbot/template/prompt_context.js";
 import type { CompiledStateGraph } from "@langchain/langgraph";
 import { AsyncKeyedMutex } from "../utils/async-mutex.js";
 import { clearThread as clearThreadState } from "./thread_manager.js";
@@ -96,27 +97,36 @@ export abstract class BaseAgent {
 
         // Pre-process event data for the ${} template
         const time = new Date(event.timestamp).toISOString();
-        let refText = "无";
+        let refText = "[No quote]";
         if ((event as any).reference?.MessageEvent) {
             const refMsg = (event as any).reference.MessageEvent;
-            refText = `${refMsg.messageId} ${refMsg.message || "[无内容]"}`;
+            refText = `${refMsg.messageId} ${refMsg.message || "[No content]"}`;
         }
 
-        const templateData = {
+        // Merge session context with global context
+        const templateData: Record<string, any> = {
+            ...getPromptContext({
+                userId: event.userId,
+                publicId: event.publicId || "[Not in a group]",
+                username: event.username,
+                message: msg,
+                adapter: event.adapter,
+            }),
             ...event,
             time,
-            refText,
+            refText: refText.length > 100 ? refText.slice(0, 100) + "..." : refText,
+            refId: (event as any).reference?.MessageEvent?.messageId || "[No ID]",
             message: msg,
         };
 
         const adapter = event.adapter;
         // Try adapter-specific template first, then generic "message"
-        let content = await Prompts.build(`${adapter}_message`, templateData as Record<string, any>);
+        let content = await Prompts.build(`${adapter}-message`, templateData);
         if (!content) {
-            content = await Prompts.build("message", templateData as Record<string, any>);
+            content = await Prompts.build("message", templateData);
         }
         if (!content) {
-            this.logger.warn(`Template "${adapter}_message" not found, using raw message`);
+            this.logger.warn(`Template "${adapter}-message" not found, using raw message`);
             return new HumanMessage({ content: msg });
         }
         return new HumanMessage({ content });

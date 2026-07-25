@@ -7,6 +7,8 @@ import {
     imageViewerTool,
     decorateReplyTool,
 } from "../other/tools_other.js";
+import { runShellTool } from "./shell_tool.js";
+
 
 export class SystemToolProvider implements IToolProvider {
     private tools: DynamicStructuredTool[];
@@ -18,6 +20,7 @@ export class SystemToolProvider implements IToolProvider {
             finishTaskTool,
             imageViewerTool,
             decorateReplyTool,
+            runShellTool,
         ];
     }
 
@@ -30,6 +33,6 @@ export class SystemToolProvider implements IToolProvider {
     }
 
     getDescription(): string {
-        return "Core system tools — web search, image viewer, todo list, task tracking";
+        return "Core system tools — shell command, web search, image viewer, todo list, task tracking";
     }
 }

@@ -1,5 +1,5 @@
 ---
-name: test-agent
+name: test
 description: A test agent for handling test sessions — echoes input back
 tools: [ask_user]
 ---

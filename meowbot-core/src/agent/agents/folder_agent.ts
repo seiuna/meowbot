@@ -21,6 +21,8 @@ import { checkpointer } from "../checkpointer.js";
 import { DynamicStructuredTool } from "@langchain/core/tools";
 import { toolRegistry } from "../../tools/tool_registry.js";
 import { compactThread } from "../thread_manager.js";
+import { renderTemplate } from "../../template/engine.js";
+import { getPromptContext } from "../../template/prompt_context.js";
 import type { MessageItem } from "@meowbot/gateway/adapters/types";
 import type { AgentConfig } from "../agent_config.js";
 import type { PendingDecoration } from "../../tools/other/tools_other.js";
@@ -58,14 +60,20 @@ export class FolderAgent extends BaseAgent {
             // Prompt comes directly from AGENT.md body (after YAML frontmatter)
             const promptBody = this.config.prompt || this.config.description;
 
-            // Get tools from all registered providers matching the agent's tools list
+            // Get tools matching the agent's tools list
             const allToolNames = new Set(this.config.tools);
-            const allTools = toolRegistry.getAllTools().filter(
+            let matchedTools = toolRegistry.getAllTools().filter(
                 t => allToolNames.has(t.name) && (t as any).isEnabled !== false
             );
+            // Fallback: if no tools matched by name, give the agent ALL available tools
+            if (matchedTools.length === 0) {
+                matchedTools = toolRegistry.getAllTools().filter(
+                    t => (t as any).isEnabled !== false
+                );
+            }
 
             this.skillCache = {
-                tools: Array.from(new Set(allTools)) as DynamicStructuredTool[],
+                tools: Array.from(new Set(matchedTools)) as DynamicStructuredTool[],
                 prompt: promptBody,
                 fewshot: () => {
                     const msgs: BaseMessage[] = [];
@@ -98,7 +106,20 @@ export class FolderAgent extends BaseAgent {
     private async executorNode(state: typeof AgentState.State, config: RunnableConfig): Promise<Partial<typeof AgentState.State>> {
         const skill = await this.resolveSkill();
         const model = modelRegistry.getModel("executor").bindTools(skill.tools);
-        const messages = [new SystemMessage(skill.prompt), ...skill.fewshot(), ...state.messages];
+
+        // Render prompt with session context (systime, userId, etc.)
+        const sessionCtx = (config as any)?.configurable?.session;
+        const event = sessionCtx?.event;
+        const context = getPromptContext({
+            userId: event?.userId,
+            publicId: event?.publicId,
+            username: event?.username,
+            message: event?.message,
+            adapter: event?.adapter,
+        });
+        const renderedPrompt = renderTemplate(skill.prompt, context);
+        // logger.debug(`[${this.config.name}] rendered prompt: ${renderedPrompt}`);
+        const messages = [new SystemMessage(renderedPrompt), ...skill.fewshot(), ...state.messages];
         const response = await model.invoke(messages, config);
         return { messages: [response] };
     }
@@ -129,34 +150,53 @@ export class FolderAgent extends BaseAgent {
             };
             const stream = await this.app.streamEvents({ messages: [userMessage] }, { ...config, version: "v3" });
 
-            let isFirstText = true;
-            const pendingDeco = (session as any).pendingDecoration as PendingDecoration | null;
-            if (pendingDeco) delete (session as any).pendingDecoration;
-            const pendingAttachments: MessageItem[] = [];
-
             for await (const message of stream.messages) {
                 const text = await message.text;
                 const usage = await message.usage;
-                if (text.length > 0 && message.node !== "contentFilter") {
-                    if (isFirstText && pendingDeco) {
+                  const pendingDeco = (session as any).pendingDecoration as PendingDecoration | null;
+                    if (pendingDeco) {
+                        delete (session as any).pendingDecoration;
+                    }
+                    const pendingAttachments: MessageItem[] = [];
+
+                    if (pendingDeco) {
+                        // Build decorated first message: [reply?, at..., text]
                         const decorated: MessageItem[] = [];
-                        if (pendingDeco.reply) decorated.push({ type: "reply", data: pendingDeco.reply });
-                        if (pendingDeco.at) for (const uid of pendingDeco.at) decorated.push({ type: "at", data: uid });
+                        if (pendingDeco.reply) {
+                            decorated.push({ type: "reply", data: pendingDeco.reply });
+                        }
+                        if (pendingDeco.at && pendingDeco.at.length > 0) {
+                            for (const uid of pendingDeco.at) {
+                                decorated.push({ type: "at", data: uid });
+                            }
+                        }
                         decorated.push({ type: "text", data: text });
                         session.message(decorated);
-                        isFirstText = false;
-                        if (pendingDeco.image) for (const fid of pendingDeco.image) pendingAttachments.push({ type: "image", data: fid });
-                        if (pendingDeco.file) for (const fid of pendingDeco.file) pendingAttachments.push({ type: "file", data: fid });
+
+                        // Collect file/image for after the loop
+                        if (pendingDeco.image && pendingDeco.image.length > 0) {
+                            for (const fid of pendingDeco.image) {
+                                pendingAttachments.push({ type: "image", data: fid });
+                            }
+                        }
+                        if (pendingDeco.file && pendingDeco.file.length > 0) {
+                            for (const fid of pendingDeco.file) {
+                                pendingAttachments.push({ type: "file", data: fid });
+                            }
+                        }
+                        if (pendingAttachments.length > 0) {
+                            session.message(pendingAttachments);
+                        }
                     } else {
-                        session.message([{ type: "text", data: text }]);
+                        if (text && text.length > 0) {
+                            session.message([{ type: "text", data: text }]);
+                        }
                     }
-                }
                 if (usage) {
                     const u = usage as Record<string, any>;
                     logger.info("[LLM] in=" + (u.input_tokens ?? 0) + " cache=" + (u.input_token_details?.cache_read ?? 0) + " out=" + (u.output_tokens ?? 0) + " total=" + (u.total_tokens ?? 0));
                 }
             }
-            if (pendingAttachments.length > 0) session.message(pendingAttachments);
         } catch (error) {
             logger.error(`[${this.config.name}] error: ${error}`);
             session.message([{ type: "text", data: "处理消息时出现错误，请稍后重试。" }]);
@@ -168,4 +208,14 @@ export class FolderAgent extends BaseAgent {
     }
 
     getGraph() { return this.app; }
+
+    /**
+     * Get the rendered system prompt with template variables resolved.
+     * Used by /system session dump.
+     */
+    async getRenderedPrompt(event?: { userId?: string; publicId?: string; username?: string; message?: string; adapter?: string }): Promise<string> {
+        const skill = await this.resolveSkill();
+        const context = getPromptContext(event);
+        return renderTemplate(skill.prompt, context);
+    }
 }

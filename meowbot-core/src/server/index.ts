@@ -2,12 +2,30 @@ import "reflect-metadata";
 
 import { NestFactory } from "@nestjs/core";
 import { ExpressAdapter } from "@nestjs/platform-express";
-import { Module, type INestApplication } from "@nestjs/common";
+import { Module, type INestApplication, LoggerService } from "@nestjs/common";
 import express from "express";
 import { GenerationModule, GenerationService, ConfigModule, ConfigService, ApiModule, ServeModule, WorkspaceModule } from "./endpoint/index.js";
 import { getLogger } from "../utils/logs.js";
 
 const logger = getLogger("Server");
+
+// ── NestJS logger adapter — delegates to meowbot's Logger ──
+
+class NestLogger implements LoggerService {
+    private loggers: Record<string, ReturnType<typeof getLogger>> = {};
+
+    private getLogger(context?: string) {
+        const key = context || "Nest";
+        if (!this.loggers[key]) this.loggers[key] = getLogger(key);
+        return this.loggers[key];
+    }
+
+    log(message: any, context?: string) { this.getLogger(context).info(message); }
+    error(message: any, trace?: string, context?: string) { this.getLogger(context).error(message + (trace ? "\n" + trace : "")); }
+    warn(message: any, context?: string) { this.getLogger(context).warn(message); }
+    debug(message: any, context?: string) { this.getLogger(context).debug(message); }
+    verbose(message: any, context?: string) { this.getLogger(context).debug(message); }
+}
 
 const DEFAULT_PORT = 35023;
 
@@ -55,13 +73,21 @@ export class AppServer {
         if (this.app) return;
 
         const expressApp = express();
-        const nestApp = await NestFactory.create(AppModule, new ExpressAdapter(expressApp));
+        const nestLogger = new NestLogger();
+        const nestApp = await NestFactory.create(AppModule, new ExpressAdapter(expressApp), {
+            logger: nestLogger,
+        });
         nestApp.enableCors({
             origin: true,
             methods: ["GET", "POST", "OPTIONS"],
             allowedHeaders: ["Content-Type", "Authorization"],
         });
+        // Suppress NestJS startup banner
+        const noop = () => {};
+        const origLog = console.log;
+        console.log = noop;
         await nestApp.listen(port, "0.0.0.0");
+        console.log = origLog;
 
         this.app = nestApp;
         this._port = port;

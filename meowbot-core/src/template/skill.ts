@@ -51,7 +51,8 @@ export class Skill {
      * Supports `${variable}` interpolation via the engine.
      */
     prompt(data?: Record<string, unknown>): string {
-        if (!data || Object.keys(data).length === 0) return this.rawPrompt;
+        if (!data || Object.keys(data).length === 0) 
+            return this.rawPrompt;
         return renderTemplate(this.rawPrompt, data as Record<string, any>);
     }
 

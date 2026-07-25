@@ -2,7 +2,8 @@ import EventEmitter from "node:events";
 import { readFile } from "node:fs/promises";
 import { MessageGateway } from "../message_gateway";
 import { SessionContext, SessionType } from "../index.types";
-import { SelectRequest, SelectOption, findMatchingOption } from "../hitl.js";
+import { SelectRequest, SelectOption, findMatchingOption, attachResult } from "../hitl.js";
+import type { HITLRequest, HITLResponse, HITLWaitResult } from "../hitl.js";
 import z from "zod";
 import { Holder } from "@meowbot/utils/holder";
 import { getLogger } from "@meowbot/utils/logs";
@@ -122,8 +123,15 @@ export abstract class BaseAdapter extends EventEmitter<CallBackEvents> {
     /** Adapter metadata */
     private meta: AdapterMeta;
 
-    /** HITL waiting sessions, keyed by sessionId */
+    /** HITL waiting sessions, keyed by userId:publicId composite key */
     private waitingSessions: Map<string, SessionContext<SessionType>> = new Map();
+    /** Per-session HITL timeout timers */
+    private hitlTimers: Map<string, NodeJS.Timeout> = new Map();
+
+    /** Build composite HITL key: "userId" or "userId:publicId" (group chat scope). */
+    private makeHitlKey(userId: string, publicId?: string): string {
+        return publicId ? `${userId}:${publicId}` : userId;
+    }
 
 
     /**
@@ -189,89 +197,198 @@ export abstract class BaseAdapter extends EventEmitter<CallBackEvents> {
 
     // ── HITL Session Management ──
 
+    // ── HITL Request Formatting ──
+
+    /** Format a select request as a readable message text. */
+    protected formatSelectRequest(request: SelectRequest): string {
+        let content = `${request.prompt}\n\n`;
+        request.options.forEach((option, index) => {
+            content += `${index + 1}. ${option.label}`;
+            if (option.description) { content += ` - ${option.description}`; }
+            content += "\n";
+        });
+        if (request.allowCustom) {
+            content += `${request.options.length + 1}. ${request.customLabel ?? "其他"}\n`;
+        }
+        if (request.multiple) { content += "\n（可多选，用逗号分隔选项编号）"; }
+        return content;
+    }
+
+    /** Format a confirm request. */
+    protected formatConfirmRequest(request: import("../hitl.js").ConfirmRequest): string {
+        return `${request.prompt}\n\n1. ${request.confirmLabel ?? "确认"}\n2. ${request.cancelLabel ?? "取消"}`;
+    }
+
+    /** Format a text request. */
+    protected formatTextRequest(request: import("../hitl.js").TextRequest): string {
+        let content = `${request.prompt}`;
+        if (request.placeholder) { content += `\n\n${request.placeholder}`; }
+        return content;
+    }
+
+    /** Format any HITL request into a text message. */
+    protected formatHITLRequest(request: HITLRequest): string {
+        switch (request.type) {
+            case "select": return this.formatSelectRequest(request);
+            case "confirm": return this.formatConfirmRequest(request);
+            case "text": return this.formatTextRequest(request);
+            default: return "未知请求类型";
+        }
+    }
+
     /**
-     * Register a session as waiting for HITL response
-     * @param session - The session context that is waiting
+     * Complete HITL wait cycle — format, send, create promise, set timeout.
+     * The adapter owns the full lifecycle: the session just calls this.
+     *
+     * @returns Promise that resolves with the user's response, narrowed by request type.
      */
+    public async waitForHITL<T extends HITLRequest>(
+        session: SessionContext<SessionType>,
+        request: T,
+    ): Promise<HITLWaitResult<T>> {
+        const key = this.makeHitlKey(session.event.userId, session.event.publicId);
+        const timeoutMs = request.timeoutMs ?? 30000;
+
+        // Check no duplicate wait for this user in this scope
+        if (this.waitingSessions.has(key)) {
+            throw new Error(`User ${session.event.userId} already has a pending HITL session`);
+        }
+
+        // Mark session as waiting
+        (session as any).isWaiting = true;
+        this.waitingSessions.set(key, session);
+
+        // Send the formatted request
+        const messageContent = this.formatHITLRequest(request);
+        this.emit("message", "Agent", session, [{ type: "text", data: messageContent }]);
+
+        return new Promise<HITLWaitResult<T>>((resolve) => {
+            const resolveWrapped = (raw: HITLResponse) => {
+                resolve(attachResult(raw, request));
+            };
+            (session as any).__hitlResolve = resolveWrapped;
+
+            // Set timeout
+            const timer = setTimeout(() => {
+                this.waitingSessions.delete(key);
+                this.clearHitlTimer(key);
+                (session as any).isWaiting = false;
+                delete (session as any).__hitlResolve;
+                (session as any).__hitlTimeout = null;
+                resolve(attachResult({ type: "timeout" }, request));
+            }, timeoutMs);
+            this.hitlTimers.set(key, timer);
+            (session as any).__hitlTimeout = timer;
+        });
+    }
+
+    /** Register a session as waiting — delegates to waitForHITL. */
     public registerWaitingSession(session: SessionContext<SessionType>): void {
-        this.waitingSessions.set(session.sessionId, session);
-        logger.debug(`[${this.meta.name}] Registered waiting session: ${session.sessionId}`);
+        const key = this.makeHitlKey(session.event.userId, session.event.publicId);
+        if (this.waitingSessions.has(key)) {
+            throw new Error(`Session already waiting for user ${session.event.userId}`);
+        }
+        this.waitingSessions.set(key, session);
+        logger.debug(`[${this.meta.name}] Registered HITL session for user ${session.event.userId}`);
     }
 
-    /**
-     * Unregister a session from waiting
-     * @param sessionId - The session ID to unregister
-     */
+    /** Unregister a waiting session by sessionId. */
     public unregisterWaitingSession(sessionId: string): void {
-        this.waitingSessions.delete(sessionId);
-        logger.debug(`[${this.meta.name}] Unregistered waiting session: ${sessionId}`);
+        for (const [key, session] of this.waitingSessions) {
+            if (session.sessionId === sessionId) {
+                this.waitingSessions.delete(key);
+                this.clearHitlTimer(key);
+                return;
+            }
+        }
     }
 
-    /**
-     * Get a waiting session by session ID
-     * @param sessionId - The session ID
-     * @returns The waiting session or undefined
-     */
+    /** Clear HITL timeout timer. */
+    private clearHitlTimer(key: string): void {
+        const timer = this.hitlTimers.get(key);
+        if (timer) { clearTimeout(timer); this.hitlTimers.delete(key); }
+    }
+
+    /** Set a HITL timeout (scope-aware via composite key). */
+    public setHitlTimeout(userId: string, publicId: string | undefined, session: SessionContext<SessionType>, timeoutMs: number): void {
+        const key = this.makeHitlKey(userId, publicId);
+        this.clearHitlTimer(key);
+        const timer = setTimeout(() => {
+            if (this.waitingSessions.get(key)?.sessionId === session.sessionId) {
+                this.waitingSessions.delete(key);
+                this.hitlTimers.delete(key);
+            }
+        }, timeoutMs);
+        this.hitlTimers.set(key, timer);
+    }
+
+    /** Get a waiting session by session ID. */
     public getWaitingSession(sessionId: string): SessionContext<SessionType> | undefined {
-        return this.waitingSessions.get(sessionId);
+        for (const s of this.waitingSessions.values()) {
+            if (s.sessionId === sessionId) return s;
+        }
+        return undefined;
     }
 
-    /**
-     * Get all waiting sessions
-     * @returns Map of waiting sessions
-     */
+    /** Get all waiting sessions (userId:publicId → SessionContext). */
     public getWaitingSessions(): Map<string, SessionContext<SessionType>> {
         return new Map(this.waitingSessions);
     }
 
-    /**
-     * Check if a session is waiting
-     * @param sessionId - The session ID
-     * @returns True if the session is waiting
-     */
+    /** Check if a session is waiting by sessionId. */
     public isSessionWaiting(sessionId: string): boolean {
-        return this.waitingSessions.has(sessionId);
+        for (const s of this.waitingSessions.values()) {
+            if (s.sessionId === sessionId) return true;
+        }
+        return false;
     }
 
-    /**
-     * Check if any session is waiting
-     * @returns True if any session is waiting
-     */
+    /** Check if any session is waiting. */
     public hasWaitingSessions(): boolean {
         return this.waitingSessions.size > 0;
     }
 
     /**
-     * Handle incoming message and check if it's a HITL response
-     * Call this method in your message handler before processing normal messages
-     * @param message - The incoming message event
-     * @returns True if the message was handled as a HITL response
+     * Handle incoming message and check if it's a HITL response.
+     * Uses userId:publicId composite key lookup.
      */
     protected handleHITLResponseIfWaiting(message: MessageEvent): boolean {
-        // Check if this user has a waiting session
-        for (const [sessionId, session] of this.waitingSessions) {
-            if (session.event.userId === message.userId) {
-                // Parse the response
-                const request = (session as any).getCurrentRequest();
-                if (request) {
-                    const response = this.parseHITLResponse(request, message.message);
-                    if (response) {
-                        // If response has error, notify via onError callback and send error message
-                        if (response.type === "select" && response.error) {
-                            if (request.onError) {
-                                request.onError(message.message, response.error);
-                            }
-                            this.emit("message", "Agent", session, [{ type: "text", data: response.error }]);
-                            return true;
-                        }
-                        session.resolve(response);
-                        logger.debug(`[${this.meta.name}] HITL response resolved for session: ${sessionId}`);
-                        return true;
-                    }
-                }
+        const key = this.makeHitlKey(message.userId, message.publicId);
+        const session = this.waitingSessions.get(key);
+        if (!session) return false;
+
+        const request = (session as any).getCurrentRequest?.();
+        if (!request) return false;
+
+        const response = this.parseHITLResponse(request, message.message);
+        if (!response) return false;
+
+        // Error: invalid selection — re-prompt
+        if (response.type === "select" && response.error) {
+            if (request.onError) request.onError(message.message, response.error);
+            this.emit("message", "Agent", session, [{ type: "text", data: response.error }]);
+            return true;
+        }
+
+        // Success: clean up
+        this.clearHitlTimer(key);
+        this.waitingSessions.delete(key);
+
+        const resolveFn = (session as any).__hitlResolve;
+        if (resolveFn) {
+            delete (session as any).__hitlResolve;
+            const timer = (session as any).__hitlTimeout;
+            if (timer) { clearTimeout(timer); delete (session as any).__hitlTimeout; }
+            (session as any).isWaiting = false;
+            resolveFn(response);
+        } else {
+            if (typeof (session as any).resolve === "function") {
+                (session as any).resolve(response);
             }
         }
-        return false;
+
+        logger.debug(`[${this.meta.name}] HITL resolved for ${key}`);
+        return true;
     }
 
     /**
@@ -550,8 +667,7 @@ export interface MessageEvent {
      */
     publicId?: string;
     /**
-     * Unique message identifier within the adapter
-     * Mapped to {adapter:messageId} format when sent to the Gateway
+     * Unique message identifier within the adapter (e.g. QQ message_seq / Bilibili msg_key).
      */
     messageId: string;
     /**

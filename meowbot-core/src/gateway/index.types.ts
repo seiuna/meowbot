@@ -3,7 +3,7 @@ import { BaseAdapter, CommandEvent, MessageData, MessageEvent, HandleSource } fr
 import { Holder } from "@meowbot/utils/holder";
 import { randomUUID } from "crypto";
 import { IUserProfile } from "@meowbot/database/models";
-import { HITLRequest, HITLResponse, HITLWaitResult, attachResult, SelectRequest, ConfirmRequest, TextRequest } from "./hitl.js";
+import { HITLRequest, HITLResponse, HITLWaitResult } from "./hitl.js";
 import { getUserProfileManager } from "@meowbot/social/user_profile_manager.js";
 
 // Re-export HITL types
@@ -18,6 +18,7 @@ export {
     isTextResponse,
     isRejectResponse,
     isTimeoutResponse,
+    attachResult,
 } from "./hitl.js";
 
 /**
@@ -186,11 +187,10 @@ export class SessionContextImp<T extends SessionType = "message"> implements Ses
     
     /** HITL state */
     public isWaiting: boolean = false;
+    /** Current HITL request — used by adapter to parse responses */
+    public currentRequest: HITLRequest | null = null;
     /** Source of message emission — set automatically, can be overridden by tools/sub-agents */
     public handleSource: HandleSource;
-    private currentRequest: HITLRequest | null = null;
-    private resolvePromise: ((response: HITLResponse) => void) | null = null;
-    private rejectPromise: ((reason: any) => void) | null = null;
     private waitTimeout: NodeJS.Timeout | null = null;
 
     constructor(
@@ -259,170 +259,59 @@ export class SessionContextImp<T extends SessionType = "message"> implements Ses
     }
 
     /**
-     * Wait for user interaction (HITL)
-     * @param request - The HITL request
-     * @returns Promise that resolves with the user's response, narrowed by request type
+     * Wait for user interaction (HITL).
+     * Delegates entirely to the adapter which owns the complete lifecycle.
      */
-    public wait<T extends HITLRequest>(request: T): Promise<HITLWaitResult<T>> {
+    public async wait<T extends HITLRequest>(request: T): Promise<HITLWaitResult<T>> {
         if (this.isWaiting) {
-            return Promise.reject(new Error("Session is already waiting for HITL response"));
+            throw new Error("Session is already waiting for HITL response");
         }
-
         this.isWaiting = true;
         this.currentRequest = request;
-
-        // Get timeout from request or default
-        const timeoutMs = request.timeoutMs ?? 30000;
-
-        // Register this session as waiting in the adapter
-        const adapter = this.getAdapter();
-        adapter.registerWaitingSession(this);
-
-        // Send the request to the user
-        this.sendHITLRequest(request);
-
-        return new Promise<HITLWaitResult<T>>((resolve, reject) => {
-            this.resolvePromise = ((raw: HITLResponse) => {
-                resolve(attachResult(raw, request));
-            }) as (response: HITLResponse) => void;
-            this.rejectPromise = reject;
-
-            // Set timeout
-            this.waitTimeout = setTimeout(() => {
-                this.isWaiting = false;
-                this.currentRequest = null;
-                this.resolvePromise = null;
-                this.rejectPromise = null;
-                this.waitTimeout = null;
-                // Unregister from adapter
-                adapter.unregisterWaitingSession(this.sessionId);
-                resolve(attachResult({ type: "timeout" }, request));
-            }, timeoutMs);
-        });
-    }
-
-    /**
-     * Send HITL request to the user via adapter
-     */
-    private sendHITLRequest(request: HITLRequest): void {
-        const adapter = this.getAdapter();
-        if (!adapter) return;
-
-        let messageContent: string;
-
-        switch (request.type) {
-            case "select":
-                messageContent = this.formatSelectRequest(request);
-                break;
-            case "confirm":
-                messageContent = this.formatConfirmRequest(request);
-                break;
-            case "text":
-                messageContent = this.formatTextRequest(request);
-                break;
-            default:
-                messageContent = "未知请求类型";
+        try {
+            const adapter = this.getAdapter();
+            return await adapter.waitForHITL(this, request);
+        } catch (err) {
+            this.isWaiting = false;
+            this.currentRequest = null;
+            throw err;
         }
+    }
 
-        adapter.emit("message", this.handleSource, this, [{ type: "text", data: messageContent }]);
+    /** @deprecated HITL request sending is now handled by adapter. */
+    private sendHITLRequest(_request: HITLRequest): void {}
+
+    /** Clear timeout and reset waiting state. Used by adapter after resolution. */
+    public clearWait(): void {
+        this.isWaiting = false;
+        if (this.waitTimeout) { clearTimeout(this.waitTimeout); this.waitTimeout = null; }
     }
 
     /**
-     * Format select request for display
-     */
-    private formatSelectRequest(request: SelectRequest): string {
-        let content = `${request.prompt}\n\n`;
-        
-        request.options.forEach((option, index) => {
-            content += `${index + 1}. ${option.label}`;
-            if (option.description) {
-                content += ` - ${option.description}`;
-            }
-            content += "\n";
-        });
-
-        if (request.allowCustom) {
-            content += `${request.options.length + 1}. ${request.customLabel ?? "其他"}\n`;
-        }
-
-        if (request.multiple) {
-            content += "\n（可多选，用逗号分隔选项编号）";
-        }
-
-        return content;
-    }
-
-    /**
-     * Format confirm request for display
-     */
-    private formatConfirmRequest(request: ConfirmRequest): string {
-        let content = `${request.prompt}\n\n`;
-        content += `1. ${request.confirmLabel ?? "确认"}\n`;
-        content += `2. ${request.cancelLabel ?? "取消"}\n`;
-        return content;
-    }
-
-    /**
-     * Format text request for display
-     */
-    private formatTextRequest(request: TextRequest): string {
-        let content = `${request.prompt}`;
-        if (request.placeholder) {
-            content += `\n\n${request.placeholder}`;
-        }
-        return content;
-    }
-
-    /**
-     * Resolve a waiting session (HITL)
+     * Resolve a waiting session (HITL) — delegates to the adapter.
      */
     public resolve(response: HITLResponse): void {
-        if (!this.isWaiting || !this.resolvePromise) {
-            return;
-        }
-
-        // Clear timeout
-        if (this.waitTimeout) {
-            clearTimeout(this.waitTimeout);
-            this.waitTimeout = null;
-        }
-
-        this.isWaiting = false;
-        this.currentRequest = null;
-        
-        // Unregister from adapter
         const adapter = this.getAdapter();
-        adapter.unregisterWaitingSession(this.sessionId);
-        
-        this.resolvePromise(response);
-        this.resolvePromise = null;
-        this.rejectPromise = null;
+        if (adapter) {
+            // adapter.waitForHITL stores resolve on __hitlResolve
+            const resolveFn = (this as any).__hitlResolve;
+            if (resolveFn) {
+                delete (this as any).__hitlResolve;
+                resolveFn(response);
+                this.clearWait();
+            }
+        }
     }
 
     /**
-     * Reject a waiting session (HITL)
+     * Reject a waiting session (HITL).
      */
     public reject(reason: string): void {
-        if (!this.isWaiting || !this.rejectPromise) {
-            return;
-        }
-
-        // Clear timeout
-        if (this.waitTimeout) {
-            clearTimeout(this.waitTimeout);
-            this.waitTimeout = null;
-        }
-
-        this.isWaiting = false;
-        this.currentRequest = null;
-        
-        // Unregister from adapter
         const adapter = this.getAdapter();
-        adapter.unregisterWaitingSession(this.sessionId);
-        
-        this.rejectPromise(new Error(reason));
-        this.resolvePromise = null;
-        this.rejectPromise = null;
+        if (adapter && adapter.hasWaitingSessions()) {
+            adapter.unregisterWaitingSession(this.sessionId);
+        }
+        this.clearWait();
     }
 
     /**
@@ -446,9 +335,6 @@ export class SessionContextImp<T extends SessionType = "message"> implements Ses
         return null;
     }
 
-    /**
-     * Get the current HITL request
-     */
     public getCurrentRequest(): HITLRequest | null {
         return this.currentRequest;
     }

@@ -15,66 +15,78 @@ import { toolRegistry, IToolProvider } from "./tool_registry.js";
 
 // ── Schema extraction ──
 
-/** Convert a Zod schema to a minimal JSON Schema object. */
+/** Convert a Zod schema to a minimal JSON Schema object.
+ *  Uses duck-typing on _def.typeName instead of instanceof to work across Zod versions
+ *  (LangChain uses Zod v3 internally, project uses Zod v4).
+ */
 function toJsonSchema(zodType: z.ZodTypeAny): Record<string, any> {
+    const def = (zodType as any)._def;
+    const getDesc = () => def?.description ?? (zodType as any).description ?? "";
+    const typeName = def?.typeName ?? "";
+
     // Unwrap optional/default
-    let inner = zodType;
-    if (zodType instanceof z.ZodOptional || zodType instanceof z.ZodDefault) {
-        inner = (zodType as any)._def.innerType ?? zodType;
+    if (typeName === "ZodOptional" || typeName === "ZodDefault") {
+        return toJsonSchema(def?.innerType ?? zodType);
     }
 
-    if (inner instanceof z.ZodString) {
-        return { type: "string", ...(inner.description ? { description: inner.description } : {}) };
-    }
-    if (inner instanceof z.ZodNumber) {
-        const def = (inner as any)._def;
-        const checks = def?.checks ?? [];
-        const min = checks.find((c: any) => c.kind === "min")?.value;
-        const max = checks.find((c: any) => c.kind === "max")?.value;
-        const isInt = checks.some((c: any) => c.kind === "int");
-        return {
-            type: isInt ? "integer" : "number",
-            ...(min != null ? { minimum: min } : {}),
-            ...(max != null ? { maximum: max } : {}),
-            ...(inner.description ? { description: inner.description } : {}),
-        };
-    }
-    if (inner instanceof z.ZodBoolean) {
-        return { type: "boolean", ...(inner.description ? { description: inner.description } : {}) };
-    }
-    if (inner instanceof z.ZodArray) {
-        const itemType = (inner as any)._def.type as z.ZodTypeAny;
-        return {
-            type: "array",
-            items: toJsonSchema(itemType),
-            ...(inner.description ? { description: inner.description } : {}),
-        };
-    }
-    if (inner instanceof z.ZodObject) {
-        const shape = (inner as any).shape as Record<string, z.ZodTypeAny>;
-        const properties: Record<string, any> = {};
-        const required: string[] = [];
-        for (const [key, val] of Object.entries(shape)) {
-            properties[key] = toJsonSchema(val);
-            if (!(val instanceof z.ZodOptional) && !(val instanceof z.ZodDefault)) {
-                required.push(key);
-            }
+    switch (typeName) {
+        case "ZodString":
+            return { type: "string", ...(getDesc() ? { description: getDesc() } : {}) };
+
+        case "ZodNumber":
+        case "ZodInt": {
+            const checks = def?.checks ?? [];
+            const min = checks.find((c: any) => c.kind === "min")?.value;
+            const max = checks.find((c: any) => c.kind === "max")?.value;
+            return {
+                type: typeName === "ZodInt" ? "integer" : "number",
+                ...(min != null ? { minimum: min } : {}),
+                ...(max != null ? { maximum: max } : {}),
+                ...(getDesc() ? { description: getDesc() } : {}),
+            };
         }
-        const result: Record<string, any> = { type: "object", properties };
-        if (required.length > 0) result.required = required;
-        if (inner.description) result.description = inner.description;
-        return result;
+
+        case "ZodBoolean":
+            return { type: "boolean", ...(getDesc() ? { description: getDesc() } : {}) };
+
+        case "ZodArray": {
+            const itemType = def?.type;
+            return {
+                type: "array",
+                items: itemType ? toJsonSchema(itemType) : {},
+                ...(getDesc() ? { description: getDesc() } : {}),
+            };
+        }
+
+        case "ZodObject": {
+            const shape = def?.shape() ?? def?.shape ?? {};
+            const properties: Record<string, any> = {};
+            const required: string[] = [];
+            for (const [key, val] of Object.entries(shape)) {
+                const valDef = (val as any)._def;
+                const valType = valDef?.typeName ?? "";
+                properties[key] = toJsonSchema(val as z.ZodTypeAny);
+                if (valType !== "ZodOptional" && valType !== "ZodDefault") {
+                    required.push(key);
+                }
+            }
+            const result: Record<string, any> = { type: "object", properties };
+            if (required.length > 0) result.required = required;
+            if (getDesc()) result.description = getDesc();
+            return result;
+        }
+
+        case "ZodEnum": {
+            return {
+                type: "string",
+                enum: def?.values ?? [],
+                ...(getDesc() ? { description: getDesc() } : {}),
+            };
+        }
+
+        default:
+            return { ...(getDesc() ? { description: getDesc() } : {}) };
     }
-    if (inner instanceof z.ZodEnum) {
-        return {
-            type: "string",
-            enum: (inner as any)._def.values ?? [],
-            ...(inner.description ? { description: inner.description } : {}),
-        };
-    }
-    // Fallback: use ZodType's own description if available
-    const desc = (zodType as any).description;
-    return { ...(desc ? { description: desc } : {}) };
 }
 
 // ── search_tools ──

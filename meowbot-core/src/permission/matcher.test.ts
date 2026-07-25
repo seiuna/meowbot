@@ -75,16 +75,31 @@ describe("evaluatePermission", () => {
         expect(result.allowed).toBe(false);
     });
 
-    it("more specific allow wins over wildcard deny", () => {
+    it("deny-first: wildcard deny blocks even with specific allow", () => {
         const result = evaluatePermission(["!command.*", "command.a"], "command.a");
-        expect(result.allowed).toBe(true);
+        expect(result.allowed).toBe(false);
+        expect(result.decidedBy).toBe("!command.*");
+    });
+
+    it("deny-first: deny prefix matches sub-items", () => {
+        // !session should also block session.new, session.list etc.
+        expect(evaluatePermission(["!session", "*"], "session").allowed).toBe(false);
+        expect(evaluatePermission(["!session", "*"], "session.new").allowed).toBe(false);
+        expect(evaluatePermission(["!session", "*"], "session.list.detail").allowed).toBe(false);
+        // But should NOT block other resources
+        expect(evaluatePermission(["!session", "*"], "command.clear").allowed).toBe(true);
+        expect(evaluatePermission(["!session", "*"], "user.ask").allowed).toBe(true);
     });
 
     it("matches user's example expression", () => {
         const rules = ["!command.a", "user.ask", "command.*"];
+        // !command.a matches command.a → deny
         expect(evaluatePermission(rules, "command.a").allowed).toBe(false);
+        // command.* matches command.b → allow
         expect(evaluatePermission(rules, "command.b").allowed).toBe(true);
+        // user.ask matches → allow
         expect(evaluatePermission(rules, "user.ask").allowed).toBe(true);
-        expect(evaluatePermission(rules, "user.delete").allowed).toBe(false); // no rule matches — deny by default
+        // no rule matches → deny by default
+        expect(evaluatePermission(rules, "user.delete").allowed).toBe(false);
     });
 });

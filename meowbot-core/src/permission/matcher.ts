@@ -83,29 +83,22 @@ export function matchPattern(pattern: string[], resource: string[]): boolean {
 }
 
 /**
- * Score a pattern's specificity. Higher score = more specific.
- *
- * Scoring:
- *   - exact segment: +10
- *   - * segment:      +1
- *   - ** segment:     +0
+ * Check if a pattern matches as a prefix of the resource.
+ * Used by deny rules to also block all sub-items.
+ * e.g. pattern ["session"] → prefix match for ["session", "new"], ["session", "list"], etc.
  */
-function specificityScore(pattern: string[]): number {
-    return pattern.reduce((score, segment) => {
-        if (segment === "**") return score;
-        if (segment === "*") return score + 1;
-        return score + 10;
-    }, 0);
+function isPrefixPattern(pattern: string[], resource: string[]): boolean {
+    if (pattern.length >= resource.length) return false;
+    return matchPattern(pattern, resource.slice(0, pattern.length));
 }
 
 /**
  * Evaluate a set of permission rules against a resource path.
  *
- * Resolution:
- *   1. Consider only rules that match the resource.
- *   2. Pick the most specific matching rule(s).
- *   3. If both allow and deny exist at the same highest specificity, deny wins.
- *   4. If no rule matches, default to denied (deny by default).
+ * Resolution (deny-first):
+ *   1. Scan ALL deny (!) rules first — if any matches (full or prefix), immediately denied.
+ *   2. Scan ALL allow rules — if any matches, allowed.
+ *   3. No match → default denied (deny by default).
  */
 export function evaluatePermission(
     rules: string[],
@@ -113,32 +106,28 @@ export function evaluatePermission(
 ): PermissionCheckResult {
     const resourceSegments = resource.split(".").filter((s) => s.length > 0);
 
-    let bestScore = -1;
-    const bestRules: ParsedRule[] = [];
-
+    // 1. Deny-first: any matching ! rule blocks access immediately
+    //    Matches both exact and prefix (so !session blocks session.new / session.list etc.)
     for (const ruleText of rules) {
         const rule = parseRule(ruleText);
-        if (!matchPattern(rule.pattern, resourceSegments)) {
-            continue;
-        }
-
-        const score = specificityScore(rule.pattern);
-        if (score > bestScore) {
-            bestScore = score;
-            bestRules.length = 0;
-            bestRules.push(rule);
-        } else if (score === bestScore) {
-            bestRules.push(rule);
+        if (rule.deny && (
+            matchPattern(rule.pattern, resourceSegments) ||
+            isPrefixPattern(rule.pattern, resourceSegments)
+        )) {
+            return { allowed: false, decidedBy: rule.raw };
         }
     }
 
-    if (bestRules.length === 0) {
-        return { allowed: false };
+    // 2. Allow rules: first match grants access
+    for (const ruleText of rules) {
+        const rule = parseRule(ruleText);
+        if (!rule.deny && matchPattern(rule.pattern, resourceSegments)) {
+            return { allowed: true, decidedBy: rule.raw };
+        }
     }
 
-    const hasDeny = bestRules.some((r) => r.deny);
-    const decidedBy = bestRules.map((r) => r.raw).join(", ");
-    return { allowed: !hasDeny, decidedBy };
+    // 3. No rule matches → deny by default
+    return { allowed: false };
 }
 
 /**

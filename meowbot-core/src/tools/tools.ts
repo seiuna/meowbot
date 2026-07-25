@@ -1,10 +1,10 @@
-import {tool, DynamicStructuredTool} from "@langchain/core/tools";
-import {z} from "zod";
+import { tool, DynamicStructuredTool } from "@langchain/core/tools";
+import { z } from "zod";
 import { RunnableConfig } from "@langchain/core/runnables";
-import {getLogger} from "@meowbot/utils/logs";
+import { getLogger } from "@meowbot/utils/logs";
 import { estimateTokens, estimateToolPayloadTokens } from "@meowbot/utils/token_estimator";
 import { getPermissionService } from "@meowbot/permission";
-import type { SessionContext, SessionType } from "@meowbot/gateway/index.types";
+import { createConfirmRequest, type SessionContext, type SessionType } from "@meowbot/gateway/index.types";
 
 export type Environment = "qq_private" | "qq_group" | "console" | "system" | "all";
 
@@ -62,24 +62,23 @@ let globalThoughtHook: ThoughtHook = (name, _thought, inputs, config) => {
  * @param toolConfig   - Optional: perms (permission paths), isEnabled, required
  */
 export function defineEnvToolWithThought<T extends z.ZodObject<any>>(
-    config: {name: string; description: string; schema: T },
+    config: { name: string; description: string; schema: T },
     handler: (input: z.infer<T>, config?: ToolRunConfig) => Promise<string>,
     toolConfig?: ToolPermsConfig,
 ): EnvTool {
     const baseTool = tool(
         async (input, runConfig) => {
 
-            const {thought, ...rest} = input;
+            const { thought, ...rest } = input;
 
             if (globalThoughtHook) {
                 globalThoughtHook(config.name, thought as string, rest, runConfig as ToolRunConfig);
             }
 
-            const inputTokens = estimateToolPayloadTokens(config.name, thought as string, rest);
-            const sessionContext  = (runConfig as ToolRunConfig)?.configurable?.session;
+            const sessionContext = (runConfig as ToolRunConfig)?.configurable?.session;
             const sid = sessionContext?.threadId;
 
-            logger.info(`[tool:${config.name}] session=${sid} tokens_in=${inputTokens} args=${JSON.stringify(rest)}`);
+            logger.info(`[tool:${config.name}] session=${sid} args=${JSON.stringify(rest)}`);
 
             // ── Permission check ──
             if (toolConfig?.perms && toolConfig.perms.length > 0) {
@@ -94,6 +93,20 @@ export function defineEnvToolWithThought<T extends z.ZodObject<any>>(
                             return JSON.stringify({ ok: false, error: msg });
                         }
                     }
+                }
+            }
+
+            // User confirmation: only ask when required is explicitly true
+            if (toolConfig?.required === true) {
+                if (!sessionContext) {
+                    return JSON.stringify({ ok: false, error: "Cannot confirm: no session context" });
+                }
+                const response = await sessionContext.wait(createConfirmRequest(
+                    "The Agent wants to execute this operation:\nTool: " + config.name + "\n" + JSON.stringify(rest),
+                    { timeoutMs: 1000 * 20 }
+                ));
+                if (response?.type !== "confirm" || !response.confirmed) {
+                    return JSON.stringify({ ok: false, error: "User declined the operation" });
                 }
             }
 
@@ -144,7 +157,7 @@ export function wrapToolWithThought(
             name: tool.name,
             description: tool.description,
             schema: tool.schema as z.ZodObject<any>,
-            
+
         },
         async (input, runConfig) => {
             const result = await tool.invoke(input as z.infer<typeof tool.schema>);

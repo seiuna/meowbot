@@ -43,13 +43,7 @@ export async function startApp(): Promise<void> {
     // Generate bootstrap registration key
     BootstrapKeyManager.getInstance().generate();
 
-    await AppServer.getInstance().start();
-    await bootstrapMessageGateway();
-    await bootstrapCommandRegistry();
-
-    // Register built-in tool providers BEFORE bootstrapping agents
-    // so that agents can reference them by name in requiredToolProviders.
-    // Dynamic tools (search_tools, call_tools) must be first — all agents need them.
+    // Register tool providers BEFORE server starts or agents
     toolRegistry.register(new DynamicToolsProvider());
     toolRegistry.register(new SubagentToolProvider());
     toolRegistry.register(new WorkspaceToolProvider());
@@ -58,7 +52,7 @@ export async function startApp(): Promise<void> {
     toolRegistry.register(new UserInterventionToolProvider());
     toolRegistry.register(new NotificationToolProvider());
 
-    // Register workspace for prompts and skills
+    // Register workspace
     const wsManager = WorkspaceManager.getInstance();
     wsManager.register(new LocalWorkspace({
         id: "meowbot",
@@ -66,8 +60,7 @@ export async function startApp(): Promise<void> {
         desc: "Prompts, skills, and project config",
     }, "../workspace"));
 
-    // Register each agent directory as a read-only workspace for LLM browsing.
-    // Only agents with as_sub_agent: true get a workspace.
+    // Register agent workspaces (for sub-agent browsing)
     const agentsDir = resolve(import.meta.dirname, "..", "..", "agents");
     const { readdirSync, statSync, readFileSync } = await import("node:fs");
     try {
@@ -81,27 +74,26 @@ export async function startApp(): Promise<void> {
                 const fmMatch = raw.match(/^---\n([\s\S]*?)\n---/);
                 if (fmMatch) {
                     const asMatch = fmMatch[1].match(/^as_sub_agent:\s*(.+)$/m);
-                    if (asMatch) {
-                        asSubAgent = asMatch[1].trim().toLowerCase() !== "false";
-                    }
+                    if (asMatch) asSubAgent = asMatch[1].trim().toLowerCase() !== "false";
                 }
             } catch {}
             if (!asSubAgent) continue;
             wsManager.register(new ReadOnlyWorkspace(new LocalWorkspace({
-                id: "agent-" + entry,
-                name: "Agent: " + entry,
+                id: "agent-" + entry, name: "Agent: " + entry,
                 desc: "Read-only agent directory: " + entry,
             }, entryPath)));
         }
-        logger.info("Registered agent workspaces");
-    } catch (err) {
-        logger.warn("Failed to register agent workspaces: " + err);
-    }
+    } catch {}
 
-    // Load MCP tool providers from config
+    // Load MCP tool providers
     await bootstrapMCPProviders(toolRegistry);
 
+    // Bootstrap agents BEFORE server starts listening
     await bootstrapAgentRegistry();
+
+    await AppServer.getInstance().start();
+    await bootstrapMessageGateway();
+    await bootstrapCommandRegistry();
 
     // Load plugins after core services are ready
     await pluginManager.loadPlugins();

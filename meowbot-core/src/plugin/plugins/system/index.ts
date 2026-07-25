@@ -9,10 +9,12 @@ import { toolRegistry } from "@meowbot/tools/tool_registry.js";
 import { loadMCPConfig, saveMCPConfig } from "@meowbot/mcp/index.js";
 import type { MCPConfig, MCPServerConfig } from "@meowbot/mcp/index.js";
 import { compactThread } from "@meowbot/agent/thread_manager.js";
-import { DefaultAgent } from "@meowbot/agent/agents/default_agent.js";
+import { FolderAgent } from "@meowbot/agent/agents/folder_agent.js";
+import { WorkspaceManager } from "@meowbot/workspace/index.js";
 import { TokenStore } from "@meowbot/llm/token_store.js";
 import { NotificationTargetModel } from "@meowbot/social/notification_target.js";
 import { randomUUID } from "crypto";
+import { HumanMessage, AIMessage, SystemMessage, ToolMessage, type BaseMessage } from "@langchain/core/messages";
 
 export default class SystemPlugin extends Plugin {
     name = "system";
@@ -67,6 +69,12 @@ export default class SystemPlugin extends Plugin {
             .desc("显示当前 session 信息")
             .action(async (ctx: SessionContext<"command">, args: Record<string, any>) => {
                 return this.handleSessionInfo(ctx);
+            });
+
+        sessionCmd.literal("dump")
+            .desc("导出当前会话的消息记录 + 系统提示词为 Markdown")
+            .action(async (ctx: SessionContext<"command">) => {
+                return this.handleSessionDump(ctx);
             });
 
         // /system agent - Agent 管理
@@ -627,41 +635,205 @@ export default class SystemPlugin extends Plugin {
     // ── Thread Management ──
 
     private async handleThreadCompact(ctx: SessionContext<"command">): Promise<string> {
-        // The agent's thread uses sessionId + agent name, not the command thread
-        const agentThreadId = ctx.sessionId + ":default-agent";
-        const agent = agentRegistry.getAgent("default-agent");
+        // Iterate all agents to find one with messages in its thread
+        for (const [agentId, agent] of agentRegistry.getAll()) {
+            const agentThreadId = ctx.sessionId + ":" + agentId;
+            // FolderAgent has compactThread; skip agents that don't support it
+            if (!(agent instanceof FolderAgent)) continue;
+            try {
+                // Verify thread exists by checking state
+                const state = await agent.getGraph().getState({ configurable: { thread_id: agentThreadId } });
+                if (!state.values?.messages?.length) continue;
 
-        if (!(agent instanceof DefaultAgent)) {
-            return "默认 Agent 不支持 thread 操作。";
+                const result = await agent.compactThread(agentThreadId, 3);
+                return (
+                    "上下文压缩完成。\n" +
+                    "原始消息数: " + result.originalCount + "\n" +
+                    "压缩后消息数: " + result.compactedCount + "\n" +
+                    "摘要预览: " + result.summary.substring(0, 200) + "..."
+                );
+            } catch {
+                continue;
+            }
         }
-
-        try {
-            const result = await agent.compactThread(agentThreadId, 3);
-            return (
-                "上下文压缩完成。\n" +
-                "原始消息数: " + result.originalCount + "\n" +
-                "压缩后消息数: " + result.compactedCount + "\n" +
-                "摘要预览: " + result.summary.substring(0, 200) + "..."
-            );
-        } catch (error: any) {
-            return "压缩失败: " + (error.message ?? String(error));
-        }
+        return "没有找到可压缩的会话。";
     }
 
     private async handleThreadClear(ctx: SessionContext<"command">): Promise<string> {
-        const agentThreadId = ctx.sessionId + ":default-agent";
-        const agent = agentRegistry.getAgent("default-agent");
+        for (const [agentId, agent] of agentRegistry.getAll()) {
+            const agentThreadId = ctx.sessionId + ":" + agentId;
+            try {
+                const state = await agent.getGraph().getState({ configurable: { thread_id: agentThreadId } });
+                if (!state.values?.messages?.length) continue;
 
-        if (!(agent instanceof DefaultAgent)) {
-            return "默认 Agent 不支持 thread 操作。";
+                await agent.clearThread(agentThreadId);
+                return "已清除 thread 上下文。下次对话将从零开始。";
+            } catch {
+                continue;
+            }
+        }
+        return "没有找到可清除的会话。";
+    }
+
+    // ── Session Dump ──
+
+    /**
+     * 导出当前会话的消息记录 + 系统提示词为 Markdown 文件并发送。
+     * 遍历所有已注册 Agent，找到有消息记录的 thread。
+     */
+    private async handleSessionDump(ctx: SessionContext<"command">): Promise<string | void> {
+        const agents = agentRegistry.getAll();
+
+        for (const [agentId, agent] of agents) {
+            const threadId = ctx.sessionId + ":" + agentId;
+            try {
+                const graph = agent.getGraph();
+                const config = { configurable: { thread_id: threadId } };
+                const state = await graph.getState(config);
+                const messages: BaseMessage[] = state.values?.messages ?? [];
+
+                if (messages.length === 0) continue;
+
+                const lines: string[] = [];
+                lines.push(`# Session Dump`);
+                lines.push(``);
+
+                // ── Metadata table ──
+                lines.push(`| Field | Value |`);
+                lines.push(`|-------|-------|`);
+                lines.push(`| Session | \`${ctx.sessionId}\` |`);
+                lines.push(`| Agent | ${agent.name} |`);
+                lines.push(`| Thread | \`${threadId}\` |`);
+                lines.push(`| Messages | ${messages.length} |`);
+                lines.push(`| Time | ${new Date().toLocaleString("zh-CN")} |`);
+                lines.push(``);
+                lines.push(`---`);
+                lines.push(``);
+
+                // ── System prompt ──
+                if (agent instanceof FolderAgent) {
+                    try {
+                        const sysPrompt = await agent.getRenderedPrompt({
+                            userId: ctx.event.userId,
+                            publicId: ctx.event.publicId,
+                            username: ctx.event.username,
+                            message: ctx.event.message,
+                            adapter: ctx.event.adapter,
+                        });
+                        lines.push(`## System Prompt`);
+                        lines.push(``);
+                        lines.push("```text");
+                        lines.push(sysPrompt);
+                        lines.push("```");
+                        lines.push(``);
+                        lines.push(`---`);
+                        lines.push(``);
+                    } catch {
+                        lines.push(`> (无法渲染系统提示词)`);
+                        lines.push(``);
+                    }
+                }
+
+                // ── Conversation messages ──
+                lines.push(`## Messages`);
+                lines.push(``);
+
+                let msgIndex = 0;
+                for (let i = 0; i < messages.length; i++) {
+                    const msg = messages[i];
+                    msgIndex++;
+
+                    if (msg instanceof SystemMessage) {
+                        const content = typeof msg.content === "string"
+                            ? msg.content
+                            : JSON.stringify(msg.content, null, 2);
+                        lines.push(`### #${msgIndex} System`);
+                        lines.push(``);
+                        lines.push("```text");
+                        lines.push(content);
+                        lines.push("```");
+                        lines.push(``);
+                    } else if (msg instanceof HumanMessage) {
+                        const content = typeof msg.content === "string"
+                            ? msg.content
+                            : JSON.stringify(msg.content, null, 2);
+                        lines.push(`### #${msgIndex} User`);
+                        lines.push(``);
+                        lines.push("```text");
+                        lines.push(content);
+                        lines.push("```");
+                        lines.push(``);
+                    } else if (msg instanceof ToolMessage) {
+                        const content = typeof msg.content === "string"
+                            ? msg.content
+                            : JSON.stringify(msg.content, null, 2);
+                        const toolName = msg.name ? ` (${msg.name})` : "";
+                        lines.push(`### #${msgIndex} Tool Result${toolName}`);
+                        lines.push(``);
+                        lines.push("```text");
+                        lines.push(content);
+                        lines.push("```");
+                        lines.push(``);
+                    } else if (msg instanceof AIMessage) {
+                        const content = typeof msg.content === "string"
+                            ? msg.content
+                            : JSON.stringify(msg.content, null, 2);
+                        lines.push(`### #${msgIndex} Assistant`);
+                        lines.push(``);
+
+                        // Tool calls (if any)
+                        if (msg.tool_calls && msg.tool_calls.length > 0) {
+                            lines.push(`**Tool Calls:**`);
+                            lines.push(``);
+                            for (const tc of msg.tool_calls) {
+                                const argsStr = JSON.stringify(tc.args, null, 2);
+                                lines.push(`- \`${tc.name}\``);
+                                lines.push(``);
+                                lines.push("  ```json");
+                                lines.push("  " + argsStr.replace(/\n/g, "\n  "));
+                                lines.push("  ```");
+                                lines.push(``);
+                            }
+                        }
+
+                        // Text content (if any)
+                        if (content && content.length > 0) {
+                            lines.push("```text");
+                            lines.push(content);
+                            lines.push("```");
+                            lines.push(``);
+                        }
+                    }
+                }
+
+                lines.push(`---`);
+                lines.push(``);
+                lines.push(`*End of dump — ${messages.length} messages*`);
+
+                // ── Write to workspace file ──
+                const ws = WorkspaceManager.getInstance().get("meowbot");
+                if (!ws) {
+                    return "错误: 找不到工作区";
+                }
+
+                const safeId = ctx.sessionId.replace(/[^a-zA-Z0-9_-]/g, "");
+                const fileName = `session-dump-${safeId}-${Date.now()}.md`;
+                const filePath = `dumps/${fileName}`;
+                await ws.writeFile(filePath, lines.join("\n"));
+
+                // ── Send file to user ──
+                const fileId = `ws/meowbot/${filePath}`;
+                ctx.message([
+                    { type: "text", data: `已导出会话记录 (${messages.length} 条消息)` },
+                    { type: "file", data: fileId },
+                ]);
+                return;
+            } catch {
+                continue;
+            }
         }
 
-        try {
-            await agent.clearThread(agentThreadId);
-            return "已清除 thread 上下文。下次对话将从零开始。";
-        } catch (error: any) {
-            return "清除失败: " + (error.message ?? String(error));
-        }
+        return "暂无会话记录。";
     }
 
     // ── System Info ──

@@ -22,21 +22,22 @@ const logger = getLogger("AgentLoader");
 const ROOT = resolve(import.meta.dirname, "..", "..", "..");
 const AGENTS_DIR = resolve(ROOT, "agents");
 
-/** Simple YAML frontmatter parser. */
+/** Simple YAML frontmatter parser. Strips BOM first. */
 function parseFrontmatter(raw: string): { meta: Record<string, string>; body: string } {
-    const normalized = raw.replace(/\r\n/g, "\n");
+    // Strip UTF-8 BOM if present
+    const normalized = raw.replace(/\r\n/g, "\n").replace(/^\uFEFF/, "");
     let body = normalized;
     const meta: Record<string, string> = {};
-    if (normalized.startsWith("---\n")) {
-        const endIdx = normalized.indexOf("\n---", 4);
-        if (endIdx !== -1) {
-            const header = normalized.slice(4, endIdx);
-            body = normalized.slice(endIdx + 4).trim();
-            for (const line of header.split("\n")) {
-                const colonIdx = line.indexOf(":");
-                if (colonIdx > 0) {
-                    meta[line.slice(0, colonIdx).trim()] = line.slice(colonIdx + 1).trim();
-                }
+
+    // Match ---\n ... \n--- opening and closing
+    const fmMatch = normalized.match(/^---\n([\s\S]*?)\n---\n?/);
+    if (fmMatch) {
+        const header = fmMatch[1];
+        body = normalized.slice(fmMatch[0].length).trim();
+        for (const line of header.split("\n")) {
+            const colonIdx = line.indexOf(":");
+            if (colonIdx > 0) {
+                meta[line.slice(0, colonIdx).trim()] = line.slice(colonIdx + 1).trim();
             }
         }
     }

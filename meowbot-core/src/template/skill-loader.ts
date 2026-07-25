@@ -24,7 +24,8 @@ const logger = getLogger("SkillLoader");
 function parseFrontmatter(raw: string): { meta: Record<string, string>; body: string } {
     const meta: Record<string, string> = {};
     let body = raw;
-    const normalized = raw.replace(/\r\n/g, "\n");
+    // Strip \r\n and BOM
+    const normalized = raw.replace(/\r\n/g, "\n").replace(/^\uFEFF/, "");
 
     if (normalized.startsWith("---\n")) {
         const endIdx = normalized.indexOf("\n---\n", 4);
@@ -106,20 +107,29 @@ export async function loadSkills(
 
     for (const entry of entries) {
         const entryPath = join(absDir, entry);
-        let entryStat;
-        try {
-            entryStat = await stat(entryPath);
-        } catch {
-            continue;
-        }
-        if (!entryStat.isDirectory()) continue;
-        // Skip hidden folders
         if (entry.startsWith(".")) continue;
 
-        const skill = await loadSingleSkill(entryPath, providers, category);
-        if (skill) {
-            // If name collision, last-loaded wins (consistent with previous behavior)
-            skills.set(skill.meta.name, skill);
+        let entryStat;
+        try { entryStat = await stat(entryPath); } catch { continue; }
+
+        if (entryStat.isDirectory()) {
+            // Folder-per-skill: loadSingleSkill reads skill.md inside
+            const skill = await loadSingleSkill(entryPath, providers, category);
+            if (skill) skills.set(skill.meta.name, skill);
+        } else if (entry.toLowerCase().endsWith(".md")) {
+            // Flat [name].md file — parse frontmatter + body directly
+            const name = entry.replace(/\.md$/i, "");
+            const raw = await readFile(entryPath, "utf-8");
+            const fm = parseFrontmatter(raw);
+            const metaName = fm.meta.name || name;
+            const description = fm.meta.description || "";
+            const asSubAgentRaw = fm.meta["as-sub-agent"];
+            const asSubAgent = asSubAgentRaw ? asSubAgentRaw.toLowerCase() !== "false" : true;
+            const reqProvidersRaw = fm.meta["required-providers"] || fm.meta.requiredProviders || "";
+            const requiredProviders = reqProvidersRaw ? reqProvidersRaw.split(",").map(s => s.trim()).filter(Boolean) : [];
+            const skillMeta = { name: metaName, description, requiredProviders, asSubAgent, category };
+            const skill = new Skill(skillMeta, fm.body, []);
+            skills.set(metaName, skill);
         }
     }
 

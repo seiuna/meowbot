@@ -118,7 +118,6 @@ export class MessageGateway {
         // Compute and set message unique identifier
         const uniqueId = this.calculateUniqueId(message);
         message.uniqueId = uniqueId;
-        message.messageId = message.adapter + ":" + message.messageId;
 
         // Build session context
         const context: SessionContext<T> = new SessionContextImp<T>(this, message as ResolveEvent<T>, sessionType);
@@ -240,7 +239,7 @@ export const SessionResolverMiddleware: Middleware<SessionContext<SessionType>> 
         const profile = await profileManager.getUserProfile(userId);
 
         if (profile) {
-            const selectedAgent = profile.agent || "default-agent";
+            const selectedAgent = profile.agent || "default";
             const selectedSession = profile.selectedSession || ctx.sessionId;
 
             // Update context with user's selections

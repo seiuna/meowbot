@@ -1,5 +1,5 @@
 ---
-name: agent-slide-generator
+name: slide-generator
 description: Dynamic HTML slide generator — converts text, reports, comparisons into high-end "minimalist magazine" HTML presentations
 tools: [search_tools, call_tools]
 as_sub_agent: true
