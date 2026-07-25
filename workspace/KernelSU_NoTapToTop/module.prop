@@ -1,0 +1,6 @@
+id=notaptotop
+name=NoTapToTop - 禁用状态栏点击回到顶部
+version=1.0
+versionCode=1
+author=awsl
+description=禁用Android点击状态栏回到顶部的功能。通过多种方法尝试，兼容主流定制ROM和AOSP原生系统。

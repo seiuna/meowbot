@@ -1,0 +1,75 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+<meta charset="UTF-8">
+<style>
+  *, *::before, *::after { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    font-family: "Inter", -apple-system, BlinkMacSystemFont, Roboto, sans-serif;
+    background: #0b0b0b; display: flex; justify-content: center; align-items: flex-start;
+    padding: 32px 24px; min-height: 100vh;
+    color: #b9b9b9; font-size: 15px; line-height: 1.5;
+  }
+  .card {
+    background: #212121; border-radius: 8px; padding: 32px; width: 480px;
+    box-shadow: 0 8px 32px rgba(0,0,0,0.5); border: 1px solid #353535;
+  }
+  .card-header {
+    display: flex; align-items: center; gap: 12px;
+    margin-bottom: 24px; padding-bottom: 20px;
+    border-bottom: 1px solid #353535;
+  }
+  .card-icon { font-size: 24px; }
+  .card-title {
+    font-size: 24px; font-weight: 400; color: #ffffff;
+    letter-spacing: -0.24px; line-height: 1.1;
+  }
+  .card-stats {
+    font-family: "IBM Plex Mono", monospace;
+    font-size: 11px; color: #797979; margin-top: 4px;
+  }
+  .step-list { list-style: none; }
+  .step-item {
+    display: flex; align-items: flex-start; gap: 12px;
+    padding: 10px 0; border-bottom: 1px solid #353535;
+  }
+  .step-item:last-child { border-bottom: none; padding-bottom: 0; }
+  .step-num {
+    width: 22px; height: 22px; border-radius: 50%;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 11px; font-weight: 500; flex-shrink: 0;
+    font-family: "IBM Plex Mono", monospace;
+  }
+  .step-num.pending { background: #353535; color: #b9b9b9; }
+  .step-num.done { background: rgba(55,205,132,0.15); color: #37cd84; }
+  .step-text { font-size: 15px; color: #b9b9b9; line-height: 1.5; }
+  .step-text.done { text-decoration: line-through; color: #797979; }
+  .card-footer {
+    margin-top: 24px; padding-top: 16px;
+    border-top: 1px solid #353535;
+    font-family: "IBM Plex Mono", monospace;
+    font-size: 11px; color: #797979; text-align: center;
+  }
+</style>
+</head>
+<body>
+<div id="screenshot-target" class="card">
+  <div class="card-header">
+    <span class="card-icon">{{icon}}</span>
+    <div>
+      <div class="card-title">{{title}}</div>
+      <div class="card-stats">{{completed}} / {{total}} completed</div>
+    </div>
+  </div>
+  <ul class="step-list">
+    {{each steps}}
+    <li class="step-item">
+      <div class="step-num {{$value.done ? 'done' : 'pending'}}">{{$value.done ? '✓' : ($index + 1)}}</div>
+      <div class="step-text {{$value.done ? 'done' : ''}}">{{$value.text}}</div>
+    </li>
+    {{/each}}
+  </ul>
+  <div class="card-footer">{{footer}}</div>
+</div>
+</body>
+</html>

@@ -1,0 +1,6 @@
+{
+  "name": "remote-control-server",
+  "version": "1.0.0",
+  "description": "此文件已废弃，请使用 Go 后端 (main.go)",
+  "deprecated": true
+}

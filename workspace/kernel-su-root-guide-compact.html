@@ -1,0 +1,142 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=1920">
+<title>KernelSU 保 Root · 速查</title>
+<link href="https://fonts.googleapis.com/css2?family=Inter:opsz,wght@14..32,400;14..32,500;14..32,600;14..32,700&family=Noto+Serif+SC:wght@600;700&display=swap" rel="stylesheet">
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+body{background:#E8E4DC;display:flex;flex-direction:column;align-items:center;padding:40px 20px;font-family:'Inter','PingFang SC','Helvetica Neue',sans-serif;color:#1A1A1A}
+.deck{display:flex;flex-direction:column;align-items:center;gap:40px;max-width:1920px}
+.slide{width:1920px;height:1080px;background:#F4F0EA;border-radius:12px;box-shadow:0 8px 32px rgba(0,0,0,0.08);padding:60px 80px;position:relative;display:flex;flex-direction:column;overflow:hidden}
+.num{position:absolute;bottom:30px;right:60px;font-size:13px;color:#9E9892;font-weight:500;letter-spacing:.5px}
+h1{font-family:'Noto Serif SC',serif;font-size:64px;font-weight:700;color:#1A1A1A;line-height:1.2}
+h2{font-family:'Noto Serif SC',serif;font-size:32px;font-weight:600;margin-bottom:4px}
+h3{font-size:17px;font-weight:600;margin-bottom:3px}
+p{font-size:15px;color:#5C5855;line-height:1.6}
+.tag{display:inline-block;padding:2px 10px;font-size:11px;font-weight:600;border-radius:4px;letter-spacing:.3px}
+.tag-r{background:#F5E5E0;color:#B83B26}
+.tag-g{background:#E6EFEA;color:#4E6B5D}
+.tag-b{background:#E5EDF3;color:#3A5F7D}
+.tag-o{background:#F4E6DF;color:#C46D4E}
+.caution{background:#FCF8F4;border-left:3px solid #C46D4E;padding:14px 18px;border-radius:6px;font-size:14px;color:#5C5855;line-height:1.6}
+.caution strong{color:#B83B26}
+.grid2{display:flex;gap:20px;flex:1}
+.grid2>div{flex:1}
+.card{background:#FAF8F5;border:1px solid #E2DDD5;border-radius:8px;padding:20px 24px;transition:.2s}
+.card:hover{background:#FFF;border-color:#D4CEB8;box-shadow:0 4px 16px rgba(0,0,0,0.06)}
+.step{display:flex;gap:14px;padding:14px 0;border-bottom:1px solid rgba(226,221,213,0.4)}
+.step:last-child{border-bottom:none}
+.step .snum{font-family:'Inter',monospace;font-size:18px;font-weight:700;color:#C46D4E;flex-shrink:0;width:28px}
+.warn{display:flex;gap:12px;padding:12px 0;border-bottom:1px solid rgba(226,221,213,0.3)}
+.warn:last-child{border-bottom:none}
+.warn .wi{font-size:16px;flex-shrink:0}
+.cover{justify-content:center;align-items:center;text-align:center}
+.cover h1{margin-bottom:12px}
+.cover .sub{font-size:15px;color:#9E9892;letter-spacing:3px;text-transform:uppercase;margin-bottom:8px}
+.cover .divider{width:50px;height:2px;background:#E2DDD5;margin:16px auto}
+.center{justify-content:center}
+.end{justify-content:center;align-items:center;text-align:center}
+.end .big{font-family:'Noto Serif SC',serif;font-size:48px;font-weight:600;margin-bottom:8px}
+code{font-family:'JetBrains Mono','SF Mono',monospace;font-size:13px;background:#EDE9E3;padding:1px 7px;border-radius:4px}
+.flex-1{flex:1}
+</style>
+</head>
+<body>
+<div class="deck">
+
+<!-- P1: COVER -->
+<div class="slide cover">
+  <div class="sub">KernelSU OTA 更新 · 保 Root 速查</div>
+  <h1>更新不丢 Root</h1>
+  <div class="divider"></div>
+  <p style="font-size:16px;color:#5C5855">适用于 A/B 分区设备 · 小米 17 Pro / 澎湃 OS</p>
+  <div style="margin-top:40px;display:flex;gap:16px;justify-content:center">
+    <span class="tag tag-r">操作耗时 ≈ 30 秒</span>
+    <span class="tag tag-g">成功率 ≈ 98%</span>
+    <span class="tag tag-b">核心原则：先装后启</span>
+  </div>
+  <div class="num">1/4</div>
+</div>
+
+<!-- P2: 核心操作 -->
+<div class="slide">
+  <h2>核心操作</h2>
+  <p style="color:#9E9892;margin-bottom:16px">就两步，OTA 下载后 · 不要重启</p>
+  <div class="grid2">
+    <div style="display:flex;flex-direction:column;gap:6px">
+      <div class="card" style="flex:1">
+        <h3><span class="tag tag-o" style="margin-right:8px">1</span>OTA 下载后 — 别点重启</h3>
+        <p style="margin-top:6px">完整包写入非活跃槽位，此时 Root 仍在当前槽位，是保留 Root 的窗口期。</p>
+        <div class="caution" style="margin-top:10px"><strong>关键：</strong>不要手滑点「重启安装」</div>
+      </div>
+      <div class="card" style="flex:1">
+        <h3><span class="tag tag-o" style="margin-right:8px">2</span>KSU App → 安装到另一个槽位</h3>
+        <p style="margin-top:6px">KernelSU App → 安装 → 选择「安装到另一个槽位」。App 自动修补目标槽位的 boot 并注入 KSU，完成后再重启。</p>
+      </div>
+    </div>
+    <div class="card" style="justify-content:center;text-align:center;display:flex;flex-direction:column">
+      <div style="font-size:56px;font-weight:700;color:#4E6B5D;font-family:'Inter',monospace">A → B</div>
+      <div style="color:#9E9892;font-size:14px;margin:6px 0 16px">活跃槽位 → 目标槽位</div>
+      <div style="border-top:1px solid #E2DDD5;padding-top:14px">
+        <p style="font-size:14px">✅ 重启后自动切换到新系统</p>
+        <p style="font-size:14px">✅ Root 完整保留</p>
+        <p style="font-size:14px">✅ 所有模块配置不变</p>
+      </div>
+    </div>
+  </div>
+  <div class="num">2/4</div>
+</div>
+
+<!-- P3: 注意事项 + 备用 -->
+<div class="slide">
+  <h2>避坑 & 备用</h2>
+  <p style="color:#9E9892;margin-bottom:12px">常见问题 & 手动方案</p>
+  <div class="grid2">
+    <div style="display:flex;flex-direction:column;gap:4px">
+      <div class="warn"><span class="wi">🚫</span><div><h3>别用增量包</h3><p>增量包不含完整 boot.img，KSU 无法修补。必须下载完整 OTA 包。</p></div></div>
+      <div class="warn"><span class="wi">🔴</span><div><h3>澎湃 OS 需关验证</h3><p>AVB 2.0 校验会拦截修改后的 boot。<code>fastboot flash vbmeta --disable-verity --disable-verification vbmeta.img</code></p></div></div>
+      <div class="warn"><span class="wi">⭐</span><div><h3>推荐 KSU Next</h3><p>社区增强分支，修复了官方版槽位安装的稳定性问题。</p></div></div>
+    </div>
+    <div>
+      <h3 style="font-size:18px">备用方案：手动修补</h3>
+      <div class="step"><span class="snum">1</span><div><h3>提取 boot.img</h3><p>从 OTA 完整包中提取，用 payload-dumper-go 或 extract.erofs。</p></div></div>
+      <div class="step"><span class="snum">2</span><div><h3>KSU 修补</h3><p>App → 安装 → 选择 boot.img → 生成 patched_boot.img。</p></div></div>
+      <div class="step"><span class="snum">3</span><div><h3>fastboot 刷入</h3><p><code>fastboot flash boot patched_boot.img</code>（注意目标槽位）</p></div></div>
+      <div class="caution" style="margin-top:8px"><strong>App 内安装失败时</strong> 或跨版本大升级时使用此方案。</div>
+    </div>
+  </div>
+  <div class="num">3/4</div>
+</div>
+
+<!-- P4: END -->
+<div class="slide end">
+  <div class="big">OTA · Root 两不误</div>
+  <div class="divider" style="margin:12px auto"></div>
+  <p style="font-size:16px;color:#5C5855;margin-bottom:24px">核心就一句：先装后启</p>
+  <div style="display:flex;gap:20px;justify-content:center;flex-wrap:wrap">
+    <div class="card" style="text-align:center;padding:20px 32px">
+      <div style="font-size:13px;color:#9E9892">下载</div>
+      <div style="font-size:20px;font-weight:700;margin-top:4px">完整 OTA 包</div>
+    </div>
+    <div class="card" style="text-align:center;padding:20px 32px;border-color:#C46D4E">
+      <div style="font-size:13px;color:#9E9892">不要</div>
+      <div style="font-size:20px;font-weight:700;color:#B83B26;margin-top:4px">点重启</div>
+    </div>
+    <div class="card" style="text-align:center;padding:20px 32px">
+      <div style="font-size:13px;color:#9E9892">KSU App</div>
+      <div style="font-size:20px;font-weight:700;margin-top:4px">装到另一槽位</div>
+    </div>
+    <div class="card" style="text-align:center;padding:20px 32px;border-color:#4E6B5D">
+      <div style="font-size:13px;color:#9E9892">然后</div>
+      <div style="font-size:20px;font-weight:700;color:#4E6B5D;margin-top:4px">安心重启</div>
+    </div>
+  </div>
+  <p style="margin-top:32px;font-size:14px;color:#9E9892">适用于小米 17 Pro · 澎湃 OS · A/B 分区设备</p>
+  <div class="num">4/4</div>
+</div>
+
+</div>
+</body>
+</html>

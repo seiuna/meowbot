@@ -1,0 +1,9 @@
+packages:
+  - 'meowbot-core'
+  - 'meowbot-images'
+  - 'meowbot-webui'
+  - 'packages/*'
+allowBuilds:
+  esbuild: true
+  puppeteer: true
+  vue-demi: true

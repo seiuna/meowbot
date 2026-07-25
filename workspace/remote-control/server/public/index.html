@@ -1,0 +1,187 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>远程控制面板</title>
+<style>
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body { font-family: -apple-system, 'Segoe UI', sans-serif; background: #0f0f1a; color: #e0e0e0; min-height: 100vh; display: flex; justify-content: center; align-items: center; }
+.container { background: #1a1a2e; padding: 30px; border-radius: 16px; width: 680px; max-width: 95%; box-shadow: 0 8px 32px rgba(0,0,0,0.5); }
+h1 { text-align: center; margin-bottom: 8px; color: #7c5cfc; font-size: 22px; }
+.status-bar { text-align: center; margin-bottom: 20px; font-size: 14px; color: #888; }
+.status-bar .dot { display: inline-block; width: 10px; height: 10px; border-radius: 50%; margin-right: 6px; }
+.dot.online { background: #4ade80; box-shadow: 0 0 8px #4ade8080; }
+.dot.offline { background: #f87171; box-shadow: 0 0 8px #f8717180; }
+.shell-box { margin-bottom: 16px; }
+.shell-box textarea { width: 100%; height: 100px; background: #0a0a1a; border: 1px solid #333; border-radius: 8px; color: #e0e0e0; padding: 12px; font-family: 'Fira Code', 'Cascadia Code', monospace; font-size: 14px; resize: vertical; }
+.shell-box textarea:focus { outline: none; border-color: #7c5cfc; }
+.btn-row { display: flex; gap: 10px; margin-bottom: 16px; }
+.btn { flex: 1; padding: 10px; border: none; border-radius: 8px; font-size: 15px; font-weight: 600; cursor: pointer; transition: all 0.2s; }
+.btn-primary { background: #7c5cfc; color: #fff; }
+.btn-primary:hover { background: #6a4aef; }
+.btn-secondary { background: #2a2a4a; color: #e0e0e0; }
+.btn-secondary:hover { background: #3a3a5a; }
+.btn-danger { background: #dc2626; color: #fff; }
+.btn-danger:hover { background: #b91c1c; }
+.btn:disabled { opacity: 0.4; cursor: not-allowed; }
+.output-box { background: #0a0a1a; border: 1px solid #333; border-radius: 8px; padding: 12px; min-height: 200px; max-height: 400px; overflow-y: auto; font-family: 'Fira Code', 'Cascadia Code', monospace; font-size: 13px; white-space: pre-wrap; word-break: break-all; }
+.output-box .prompt { color: #7c5cfc; }
+.output-box .stdout { color: #e0e0e0; }
+.output-box .stderr { color: #f87171; }
+.output-box .info { color: #4ade80; }
+.screenshot-area { margin-top: 16px; text-align: center; }
+.screenshot-area img { max-width: 100%; border-radius: 8px; border: 1px solid #333; display: none; }
+.loading { text-align: center; padding: 20px; color: #888; display: none; }
+.spinner { display: inline-block; width: 20px; height: 20px; border: 3px solid #333; border-top-color: #7c5cfc; border-radius: 50%; animation: spin 0.8s linear infinite; margin-right: 8px; vertical-align: middle; }
+@keyframes spin { to { transform: rotate(360deg); } }
+</style>
+</head>
+<body>
+<div class="container">
+    <h1>喵控 - 远程控制面板</h1>
+    <div class="status-bar">
+        <span id="statusDot" class="dot offline"></span>
+        <span id="statusText">正在连接...</span>
+    </div>
+
+    <div class="shell-box">
+        <textarea id="shellInput" placeholder="输入 Shell 命令，例如：ls -la /home"></textarea>
+    </div>
+    <div class="btn-row">
+        <button class="btn btn-primary" id="btnExec" onclick="execShell()">执行命令</button>
+        <button class="btn btn-secondary" id="btnScreenshot" onclick="takeScreenshot()">截图桌面</button>
+        <button class="btn btn-danger" id="btnClear" onclick="clearOutput()">清空输出</button>
+    </div>
+
+    <div class="loading" id="loading">
+        <span class="spinner"></span>正在执行，请稍候...
+    </div>
+
+    <div class="output-box" id="output"></div>
+
+    <div class="screenshot-area" id="screenshotArea">
+        <img id="screenshotImg" alt="截图将显示在这里">
+    </div>
+</div>
+
+<script>
+const wsProto = location.protocol === 'https:' ? 'wss:' : 'ws:';
+const wsUrl = wsProto + '//' + location.host + '/ws';
+let ws = null;
+let authed = false;
+let userId = 'user_' + Date.now();
+
+function connect() {
+    ws = new WebSocket(wsUrl);
+
+    ws.onopen = () => {
+        setStatus('connecting', '已连接，正在认证...');
+        ws.send(JSON.stringify({ type: 'auth', role: 'user', userId, password: prompt('请输入访问密码:') || 'meow123456' }));
+    };
+
+    ws.onmessage = (e) => {
+        const msg = JSON.parse(e.data);
+        switch (msg.type) {
+            case 'auth_result':
+                if (msg.ok) {
+                    authed = true;
+                    setStatus('offline', '已认证，等待客户端连接...');
+                } else {
+                    setStatus('offline', '认证失败: ' + msg.message);
+                }
+                break;
+            case 'client_status':
+                setStatus(msg.online ? 'online' : 'offline', msg.online ? '客户端在线' : '客户端离线');
+                break;
+            case 'shell_result':
+                hideLoading();
+                appendOutput(msg.stdout || '', msg.stderr || '');
+                break;
+            case 'screenshot_result':
+                hideLoading();
+                if (msg.base64) {
+                    document.getElementById('screenshotImg').src = 'data:image/png;base64,' + msg.base64;
+                    document.getElementById('screenshotImg').style.display = 'block';
+                    appendOutput('', '', '截图已获取 (' + msg.size + ' 字节)');
+                }
+                break;
+            case 'error':
+                hideLoading();
+                appendOutput('', '', '[错误] ' + msg.message);
+                break;
+        }
+    };
+
+    ws.onclose = () => {
+        authed = false;
+        setStatus('offline', '连接断开，5秒后重连...');
+        setTimeout(connect, 5000);
+    };
+
+    ws.onerror = () => {
+        setStatus('offline', '连接错误');
+    };
+}
+
+function setStatus(state, text) {
+    const dot = document.getElementById('statusDot');
+    const txt = document.getElementById('statusText');
+    dot.className = 'dot ' + state;
+    txt.textContent = text;
+}
+
+function showLoading() {
+    document.getElementById('loading').style.display = 'block';
+    document.getElementById('btnExec').disabled = true;
+    document.getElementById('btnScreenshot').disabled = true;
+}
+
+function hideLoading() {
+    document.getElementById('loading').style.display = 'none';
+    document.getElementById('btnExec').disabled = false;
+    document.getElementById('btnScreenshot').disabled = false;
+}
+
+function appendOutput(stdout, stderr, info) {
+    const out = document.getElementById('output');
+    if (stdout) {
+        out.innerHTML += '<div class="stdout">' + escapeHtml(stdout) + '</div>';
+    }
+    if (stderr) {
+        out.innerHTML += '<div class="stderr">' + escapeHtml(stderr) + '</div>';
+    }
+    if (info) {
+        out.innerHTML += '<div class="info">' + escapeHtml(info) + '</div>';
+    }
+    out.scrollTop = out.scrollHeight;
+}
+
+function escapeHtml(s) {
+    return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+}
+
+function execShell() {
+    if (!authed || !ws || ws.readyState !== 1) { alert('未连接到服务器'); return; }
+    const cmd = document.getElementById('shellInput').value.trim();
+    if (!cmd) { alert('请输入命令'); return; }
+    showLoading();
+    document.getElementById('output').innerHTML += '<div class="prompt">$ ' + escapeHtml(cmd) + '</div>';
+    ws.send(JSON.stringify({ type: 'shell_exec', command: cmd }));
+}
+
+function takeScreenshot() {
+    if (!authed || !ws || ws.readyState !== 1) { alert('未连接到服务器'); return; }
+    showLoading();
+    ws.send(JSON.stringify({ type: 'screenshot' }));
+}
+
+function clearOutput() {
+    document.getElementById('output').innerHTML = '';
+    document.getElementById('screenshotImg').style.display = 'none';
+}
+
+connect();
+</script>
+</body>
+</html>

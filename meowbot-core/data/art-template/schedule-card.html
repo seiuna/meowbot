@@ -1,0 +1,82 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+<meta charset="UTF-8">
+<style>
+  *, *::before, *::after { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    font-family: "Inter", -apple-system, BlinkMacSystemFont, Roboto, sans-serif;
+    background: #0b0b0b; display: flex; justify-content: center; align-items: flex-start;
+    padding: 32px 24px; min-height: 100vh;
+    color: #b9b9b9; font-size: 15px; line-height: 1.5;
+  }
+  .card {
+    background: #212121; border-radius: 8px; padding: 32px; width: 480px;
+    box-shadow: 0 8px 32px rgba(0,0,0,0.5); border: 1px solid #353535;
+  }
+  .card-header {
+    display: flex; align-items: center; gap: 12px;
+    margin-bottom: 24px; padding-bottom: 20px;
+    border-bottom: 1px solid #353535;
+  }
+  .card-icon { font-size: 24px; }
+  .card-title {
+    font-size: 24px; font-weight: 400; color: #ffffff;
+    letter-spacing: -0.24px; line-height: 1.1;
+  }
+  .row { margin-bottom: 16px; }
+  .row:last-child { margin-bottom: 0; }
+  .label {
+    font-family: "IBM Plex Mono", monospace;
+    font-size: 11px; color: #797979; margin-bottom: 4px;
+    letter-spacing: 0; text-transform: uppercase;
+  }
+  .value {
+    font-size: 15px; color: #b9b9b9; line-height: 1.5;
+    background: rgba(255,255,255,0.04); border-radius: 4px;
+    padding: 8px 12px; word-break: break-word;
+  }
+  .value.cron {
+    font-family: "IBM Plex Mono", monospace;
+    font-size: 15px; color: rgba(55,205,132,0.85);
+  }
+  .badge-list { display: flex; flex-wrap: wrap; gap: 6px; }
+  .badge {
+    font-family: "IBM Plex Mono", monospace;
+    font-size: 11px; padding: 3px 10px; border-radius: 4px;
+    background: #353535; color: #b9b9b9;
+  }
+  .card-footer {
+    margin-top: 24px; padding-top: 16px;
+    border-top: 1px solid #353535;
+    font-family: "IBM Plex Mono", monospace;
+    font-size: 11px; color: #797979; text-align: center;
+  }
+</style>
+</head>
+<body>
+<div id="screenshot-target" class="card">
+  <div class="card-header">
+    <span class="card-icon">{{icon}}</span>
+    <div class="card-title">{{title}}</div>
+  </div>
+  <div class="row">
+    <div class="label">Task</div>
+    <div class="value">{{task_prompt}}</div>
+  </div>
+  <div class="row">
+    <div class="label">Schedule</div>
+    <div class="value cron">{{cron}}</div>
+  </div>
+  <div class="row">
+    <div class="label">Tools</div>
+    <div class="badge-list">
+      {{each tools}}
+      <span class="badge">{{$value}}</span>
+      {{/each}}
+    </div>
+  </div>
+  <div class="card-footer">{{footer}}</div>
+</div>
+</body>
+</html>
