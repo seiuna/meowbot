@@ -28,7 +28,6 @@
     "@nestjs/common": "^11.1.26",
     "@nestjs/core": "^11.1.26",
     "@nestjs/platform-express": "^11.1.26",
-    "@seiuna/bilibili-api": "^1.0.1",
     "@types/express": "^5.0.6",
     "agenda": "^6.2.5",
     "archiver": "^8.0.0",

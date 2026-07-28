@@ -8,7 +8,7 @@
  * Config variables (from config/placeholder.json):
  *   ${bot_name}, ${bot_version}
  *   ${qq_master_id}, ${qq_master_name}
- *   ${bilibili_master_id}, ${bilibili_master_name}
+      ${qq_master_id}, ${qq_master_name}
  *
  * Per-platform master (resolved dynamically by adapter):
  *   ${masterId}, ${masterName}

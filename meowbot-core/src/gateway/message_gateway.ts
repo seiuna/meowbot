@@ -265,7 +265,6 @@ export async function bootstrapMessageGateway() {
     messageGateway.use(AgentDispatcherMiddleware);
     
     messageGateway.registerAdapter(new QQAdapter());
-    // messageGateway.registerAdapter(new BilibiliAdapter());
     
     await messageGateway.connectAllAdapters(); 
 }
