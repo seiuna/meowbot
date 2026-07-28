@@ -18,6 +18,8 @@ yarn-error.log*
 /output.md
 /package-lock.json
 /pnpm-lock.yaml
+/cache
+.env
 /.idea/vcs.xml
 /config/
 /dist/

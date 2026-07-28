@@ -33,12 +33,19 @@ export async function bootstrapMCPProviders(toolRegistry: ToolRegistry): Promise
             const provider = new MCPToolProvider(serverKey, serverConfig);
             await provider.initialize();
             toolRegistry.register(provider);
-            return serverKey;
+            return { key: serverKey, provider };
         })
     );
 
-    const succeeded = results.filter(r => r.status === "fulfilled").length;
+    const succeeded = results.filter(r => r.status === "fulfilled") as PromiseFulfilledResult<{ key: string; provider: MCPToolProvider }>[];
     const failed = results.filter(r => r.status === "rejected");
+
+    for (const r of succeeded) {
+        const { key, provider } = r.value;
+        const tools = provider.pullAllTools();
+        const toolNames = tools.map(t => t.name).join(", ");
+        logger.info(`MCP [${key}]: ${tools.length} tool(s) — ${toolNames || "(none)"}`);
+    }
 
     for (const r of failed) {
         if (r.status === "rejected") {
@@ -46,5 +53,5 @@ export async function bootstrapMCPProviders(toolRegistry: ToolRegistry): Promise
         }
     }
 
-    logger.info(`MCP bootstrap complete: ${succeeded} succeeded, ${failed.length} failed`);
+    logger.info(`MCP bootstrap complete: ${succeeded.length} succeeded, ${failed.length} failed`);
 }

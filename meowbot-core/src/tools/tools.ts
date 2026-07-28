@@ -3,7 +3,6 @@ import { z } from "zod";
 import { RunnableConfig } from "@langchain/core/runnables";
 import { getLogger } from "@meowbot/utils/logs";
 import { estimateTokens, estimateToolPayloadTokens } from "@meowbot/utils/token_estimator";
-import { getPermissionService } from "@meowbot/permission";
 import { createConfirmRequest, type SessionContext, type SessionType } from "@meowbot/gateway/index.types";
 
 export type Environment = "qq_private" | "qq_group" | "console" | "system" | "all";
@@ -82,16 +81,11 @@ export function defineEnvToolWithThought<T extends z.ZodObject<any>>(
 
             // ── Permission check ──
             if (toolConfig?.perms && toolConfig.perms.length > 0) {
-                const userId = sessionContext?.event?.userId;
-                if (userId) {
-                    const permService = getPermissionService();
-                    for (const perm of toolConfig.perms) {
-                        const allowed = await permService.requireAllowed(userId, perm);
-                        if (!allowed) {
-                            const msg = `Permission denied: ${config.name} requires "${perm}"`;
-                            logger.warn(`[tool:${config.name}] ${msg} (user: ${userId})`);
-                            return JSON.stringify({ ok: false, error: msg });
-                        }
+                for (const perm of toolConfig.perms) {
+                    if (!(await sessionContext?.isAllowed(perm))) {
+                        const msg = `Permission denied: ${config.name} requires "${perm}"`;
+                        logger.warn(`[tool:${config.name}] ${msg} (user: ${sessionContext?.event?.userId})`);
+                        return JSON.stringify({ ok: false, error: msg });
                     }
                 }
             }

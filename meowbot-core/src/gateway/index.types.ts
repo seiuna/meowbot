@@ -176,6 +176,15 @@ export interface SessionContext<T extends SessionType = "message"> {
      *   if (denied) return denied;
      */
     require(perm: string): Promise<string | null>;
+
+    /**
+     * Check if the current user is allowed to access a resource.
+     * Uses evaluatePermission (deny-first) — deny rules take priority.
+     *
+     * @param perm - Permission resource path (e.g. "tools.shell", "user.createtask")
+     * @returns true if allowed, false if denied
+     */
+    isAllowed(perm: string): Promise<boolean>;
 }
 
 export class SessionContextImp<T extends SessionType = "message"> implements SessionContext<T> {
@@ -333,6 +342,17 @@ export class SessionContextImp<T extends SessionType = "message"> implements Ses
             return `权限不足: 需要 "${perm}" 权限。`;
         }
         return null;
+    }
+
+    /**
+     * Check if the current user is allowed to access a resource.
+     * Uses evaluatePermission (deny-first) — deny rules take priority.
+     */
+    public async isAllowed(perm: string): Promise<boolean> {
+        const { getPermissionService } = await import("../permission/index.js");
+        const userId = this.event?.userId;
+        if (!userId) return false;
+        return getPermissionService().isAllowed(userId, perm);
     }
 
     public getCurrentRequest(): HITLRequest | null {

@@ -97,16 +97,11 @@ const scheduleSubagentTool = defineEnvToolWithThought(
     async (input, runConfig) => {
         // Check user permission
         const session = (runConfig?.configurable as any)?.session;
-        const userId = session?.event?.userId;
-        if (userId) {
-            const { getPermissionService } = await import("../permission/index.js");
-            const allowed = await getPermissionService().requireAllowed(userId, "user.createtask");
-            if (!allowed) {
-                return JSON.stringify({
-                    ok: false,
-                    error: "Permission denied: user.createtask is required to create scheduled tasks.",
-                });
-            }
+        if (session && !(await session.isAllowed("user.createtask"))) {
+            return JSON.stringify({
+                ok: false,
+                error: "Permission denied: user.createtask is required to create scheduled tasks.",
+            });
         }
 
         try {

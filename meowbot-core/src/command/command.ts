@@ -7,10 +7,19 @@ const logger = getLogger("Command");
 
 export type ArgsType = Record<string, any>;
 
+/** Standardized command execution result. */
+export interface CmdResult {
+    ok: boolean;
+    /** Failure type (e.g. "permission_denied", "invalid_args", "not_found") */
+    type?: string;
+    /** Human-readable message */
+    message: string;
+}
+
 export type ActionCallback = (
     context: SessionContext<"command">,
     args: ArgsType
-) => Promise<string | void>;
+) => Promise<CmdResult | string | void>;
 
 // ── Command Node ──
 
@@ -38,6 +47,16 @@ export class Command {
     constructor(name: string, isArg = false) {
         this.name = name;
         this.isArg = isArg;
+    }
+
+    /** Create a successful command result. */
+    static ok(message: string): CmdResult {
+        return { ok: true, message };
+    }
+
+    /** Create a failed command result. */
+    static fail(type: string, message: string): CmdResult {
+        return { ok: false, type, message };
     }
 
     /**
