@@ -3,6 +3,9 @@
  * Handles all registration, initialization, and startup logic
  */
 
+// Load .env BEFORE any other imports
+import "dotenv/config";
+
 import { bootstrapCommandRegistry, commandRegistry } from "./command/dispatcher.js";
 import { bootstrapDatabase, shutdownDatabase } from "./database/init.js";
 import { bootstrapAgentRegistry } from "./agent/bootstrap.js";
@@ -19,7 +22,11 @@ import { SystemToolProvider } from "./tools/system/system_tools.js";
 import { ScheduledToolProvider } from "./tools/scheduled_tools.js";
 import { UserInterventionToolProvider } from "./tools/user/user_tools.js";
 import { NotificationToolProvider } from "./tools/user/notification_tools.js";
+import { UserProfileToolProvider } from "./social/user_profile_tools.js";
 import { DynamicToolsProvider } from "./tools/dynamic_tools.js";
+import { CommandToolProvider } from "./tools/command/command_tools.js";
+import { SkillToolProvider } from "./tools/skill/skill_tools.js";
+import { getVectorRetriever } from "./vector/index.js";
 import { WorkspaceManager, LocalWorkspace, ReadOnlyWorkspace } from "./workspace/index.js";
 import { BootstrapKeyManager } from "./permission/bootstrap_key.js";
 
@@ -51,6 +58,9 @@ export async function startApp(): Promise<void> {
     toolRegistry.register(new ScheduledToolProvider());
     toolRegistry.register(new UserInterventionToolProvider());
     toolRegistry.register(new NotificationToolProvider());
+    toolRegistry.register(new CommandToolProvider());
+    toolRegistry.register(new SkillToolProvider());
+    toolRegistry.register(new UserProfileToolProvider());
 
     // Register workspace
     const wsManager = WorkspaceManager.getInstance();
@@ -90,6 +100,13 @@ export async function startApp(): Promise<void> {
 
     // Bootstrap agents BEFORE server starts listening
     await bootstrapAgentRegistry();
+
+    // Bootstrap vector search (indexes all tools)
+    try {
+        await getVectorRetriever().bootstrap();
+    } catch (e) {
+        logger.warn("Vector retriever bootstrap failed (non-fatal):", e);
+    }
 
     await AppServer.getInstance().start();
     await bootstrapMessageGateway();

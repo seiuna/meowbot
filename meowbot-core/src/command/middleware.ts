@@ -1,9 +1,14 @@
 import { Middleware, SessionContext, SessionType } from "@meowbot/gateway";
 import { commandRegistry } from "./dispatcher.js";
 import { CommandEvent } from "@meowbot/gateway/adapters/types";
+import type { CmdResult } from "./command.js";
 import { getLogger } from "@meowbot/utils/logs";
 
 const logger = getLogger("CommandDispatcherMiddleware");
+
+function isCmdResult(v: unknown): v is CmdResult {
+    return typeof v === "object" && v !== null && "ok" in v && "message" in v;
+}
 
 /**
  * Command Dispatcher Middleware
@@ -37,6 +42,8 @@ export const CommandDispatcherMiddleware: Middleware<SessionContext<SessionType>
         const result = await commandRegistry.execute(inputString, ctx as SessionContext<"command">);
         if (typeof result === "string") {
             ctx.message(result);
+        } else if (isCmdResult(result)) {
+            ctx.message(result.message);
         }
     } catch (error) {
         logger.error(`Command dispatcher error: ${error}`);

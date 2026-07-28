@@ -59,7 +59,7 @@ export async function compactThread(
 
     // Build a text transcript for the LLM to summarize
     const transcript = messages.map((m, i) => {
-        const role = m instanceof HumanMessage ? "用户" : m instanceof AIMessage ? "AI" : "系统";
+        const role = m instanceof HumanMessage ? "User" : m instanceof AIMessage ? "AI" : "System";
         const content = typeof m.content === "string" ? m.content : JSON.stringify(m.content);
         return "[" + role + " #" + i + "] " + content;
     }).join("\n");

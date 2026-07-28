@@ -166,13 +166,14 @@ class SkillRegistryStore {
 
     // ── Metadata (backward compat) ──
 
-    /** Get skill metadata (compatible with old getMeta, now includes category). */
+    /** Get skill metadata with content. */
     async getMeta(name: string): Promise<{
         name: string;
         description: string;
         requiredProviders: string[];
         asSubAgent: boolean;
         category: "prompt" | "skill" | "template";
+        content: string;
     } | null> {
         const skill = await this.get(name);
         if (!skill) return null;
@@ -182,6 +183,7 @@ class SkillRegistryStore {
             requiredProviders: skill.meta.requiredProviders,
             asSubAgent: skill.meta.asSubAgent,
             category: skill.meta.category,
+            content: skill.prompt(),
         };
     }
 

@@ -1,4 +1,4 @@
-﻿import { Command, ArgsType, checkScope } from "./command.js";
+﻿import { Command, ArgsType, checkScope, type CmdResult } from "./command.js";
 import { getLogger } from "../utils/logs.js";
 import { SessionContext } from "@meowbot/gateway";
 import { CommandEvent } from "@meowbot/gateway/adapters/types";
@@ -75,21 +75,28 @@ export class CommandRegistry {
     }
 
     /**
+     * Get all registered root commands (primary names only, no aliases).
+     */
+    getRootCommands(): Map<string, Command> {
+        return new Map(this.rootCommands);
+    }
+
+    /**
      * Execute a command string
      * @param inputString - The full command string (without leading /)
      * @param context - The session context for execution
      */
-    async execute(inputString: string, context: SessionContext<"command">): Promise<string | void> {
+    async execute(inputString: string, context: SessionContext<"command">): Promise<CmdResult | string | void> {
         const parts = inputString.trim().split(/\s+/);
         if (parts.length === 0 || parts[0] === "") {
-            return "请输入有效命令。输入 /help 查看可用命令。";
+            return Command.fail("invalid_args", "请输入有效命令。输入 /help 查看可用命令。");
         }
 
         const rootName = parts[0].toLowerCase();
         let currentNode = this.roots.get(rootName);
 
         if (!currentNode) {
-            return `未知命令: /${parts[0]}\n输入 /help 查看帮助。`;
+            return Command.fail("not_found", `未知命令: /${parts[0]}\n输入 /help 查看帮助。`);
         }
 
         const argsDict: ArgsType = {};
@@ -148,7 +155,7 @@ export class CommandRegistry {
             const permissionResult = await getPermissionService().check(userId, resource);
             if (!permissionResult.allowed) {
                 logger.warn("Permission denied for " + userId + " on " + resource);
-                return;
+                return Command.fail("permission_denied", "你没有权限执行此命令。");
             }
         }
 
@@ -159,7 +166,7 @@ export class CommandRegistry {
                 const allowed = await getPermissionService().isAllowed(userId, required);
                 if (!allowed) {
                     logger.warn(`Permission denied for ${userId}: missing ${required}`);
-                    return;
+                    return Command.fail("permission_denied", "你没有权限执行此命令。");
                 }
             }
         }
@@ -167,7 +174,7 @@ export class CommandRegistry {
         // Check adapter scope restriction (e.g. .scope("qq") or .scope("all", "!qq")).
         if (currentNode.scopeRules.length > 0 && !checkScope(currentNode.scopeRules, context.event.adapter)) {
             logger.warn(`Scope denied for ${userId}: command not available on adapter ${context.event.adapter}`);
-            return;
+            return Command.fail("scope_denied", "此命令不可在当前平台使用。");
         }
 
         // Execute action
@@ -176,12 +183,12 @@ export class CommandRegistry {
                 return await currentNode.actionCallback(context, argsDict);
             } catch (error: any) {
                 logger.error(`Command execution error: ${error.message}`);
-                return `命令执行错误: ${error.message}`;
+                return Command.fail("execution_error", `命令执行错误: ${error.message}`);
             }
         }
 
         // No action defined - show usage hint
-        return this.generateUsageHint(currentNode, parts.join(" "));
+        return Command.fail("no_action", this.generateUsageHint(currentNode, parts.join(" ")));
     }
 
     /**

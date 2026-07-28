@@ -639,7 +639,11 @@ export abstract class BaseAdapter extends EventEmitter<CallBackEvents> {
 
 
     private _onMessage(handleSource: HandleSource, originData: SessionContext<SessionType>, content: MessageData): void {
-        logger.info(`Adapter ${this.meta.name} emitted [${handleSource}] message:`, content);
+        const preview = content.map(c => {
+            if (c.type === "text") return c.data.length > 100 ? c.data.slice(0, 100) + "..." : c.data;
+            return `[${c.type}:${typeof c.data === "string" ? c.data.slice(0, 50) : "?"}]`;
+        }).join(" | ");
+        logger.info(`Adapter ${this.meta.name} emitted [${handleSource}] message: ${preview}`);
     }
 
 }

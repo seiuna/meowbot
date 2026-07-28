@@ -26,8 +26,9 @@ import { getPromptContext } from "../../template/prompt_context.js";
 import type { MessageItem } from "@meowbot/gateway/adapters/types";
 import type { AgentConfig } from "../agent_config.js";
 import type { PendingDecoration } from "../../tools/other/tools_other.js";
+import { messageValidatorNode } from "../message_validator.js";
 
-const logger = getLogger("FolderAgent");
+const logger = getLogger("Agent");
 
 // ── State ──
 const AgentState = Annotation.Root({
@@ -92,9 +93,11 @@ export class FolderAgent extends BaseAgent {
 
     private buildGraph() {
         return new StateGraph(AgentState)
+            .addNode("messageValidator", messageValidatorNode.bind(this))
             .addNode("executor", this.executorNode.bind(this))
             .addNode("tools", this.toolsNode.bind(this))
-            .addEdge("__start__", "executor")
+            .addEdge("__start__", "messageValidator")
+            .addEdge("messageValidator", "executor")
             .addConditionalEdges("executor", this.routeAfterExecutor.bind(this), {
                 tools: "tools",
                 __end__: "__end__",
@@ -126,7 +129,7 @@ export class FolderAgent extends BaseAgent {
 
     private async toolsNode(state: typeof AgentState.State, config: RunnableConfig): Promise<Partial<typeof AgentState.State>> {
         const skill = await this.resolveSkill();
-        const toolNode = new ToolNode(skill.tools);
+        const toolNode = new ToolNode(this.toolsRegistry.getAllTools());
         return toolNode.invoke(state, config);
     }
 

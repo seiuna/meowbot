@@ -12,6 +12,12 @@ import { z } from "zod";
 import { DynamicStructuredTool } from "@langchain/core/tools";
 import { defineEnvToolWithThought } from "./tools.js";
 import { toolRegistry, IToolProvider } from "./tool_registry.js";
+import { getVectorRetriever } from "../vector/index.js";
+import { EmbeddingService } from "../vector/embeddings.js";
+import { getLogger } from "../utils/logs.js";
+
+const logger = getLogger("DynamicTools");
+const isVectorEnabled = () => EmbeddingService.getInstance().isEnabled;
 
 // ── Schema extraction ──
 
@@ -96,48 +102,71 @@ export const searchToolsTool = defineEnvToolWithThought(
         name: "search_tools",
         description:
             "Search ALL registered tools by name or description. " +
-            "Returns matching tools with their name, description, and provider. " +
+            "Returns matching tools with their name, description, provider, and JSON schema. " +
             "Use this to discover tools you need but don't have yet. " +
             "Then use call_tools(name, args) to invoke any discovered tool.",
         schema: z.object({
-            query: z.string().describe("Search keyword to match against tool name or description"),
+            query: z.string().describe("Search keyword to match against tool name or description (e.g. 'image', 'workspace', 'search')"),
             provider: z.string().optional().describe("Limit to this provider name (omit to search all)"),
         }),
     },
     async ({ query, provider }) => {
+        // Build provider map for filtering
+        const providerMap = new Map<string, string>();
+        for (const p of toolRegistry.getProviders()) {
+            for (const t of p.pullAllTools()) {
+                if (!providerMap.has(t.name)) providerMap.set(t.name, p.getName());
+            }
+        }
+
+        // Get all tools for metadata enrichment
+        const allTools = toolRegistry.getAllTools();
+        const toolByName = new Map<string, DynamicStructuredTool>();
+        for (const t of allTools) toolByName.set(t.name, t);
+
+        const enrich = (name: string, fallbackDesc?: string) => {
+            const tool = toolByName.get(name);
+            return {
+                name,
+                description: tool?.description?.substring(0, 200) ?? (fallbackDesc ?? ""),
+                provider: providerMap.get(name) || "unknown",
+                schema: (() => {
+                    try { const s = (tool as any)?.schema as z.ZodTypeAny; return s ? toJsonSchema(s) : {}; } catch { return {}; }
+                })(),
+            };
+        };
+
         try {
-            const results = toolRegistry.searchTools(query);
-            let filtered = results;
-            if (provider) {
-                const providerMap = new Map<string, string>();
-                for (const p of toolRegistry.getProviders()) {
-                    for (const t of p.pullAllTools()) {
-                        if (!providerMap.has(t.name)) providerMap.set(t.name, p.getName());
-                    }
+            // ── Vector search (if enabled) ──
+            if (isVectorEnabled()) {
+                const retriever = getVectorRetriever();
+                const hits = await retriever.searchTools(query, 20);
+                if (hits.length > 0) {
+                    let data = hits
+                        .filter(h => toolByName.has(h.metadata?.toolName || h.docId.replace("tool:", "")))
+                        .map(h => ({
+                            ...enrich(h.metadata?.toolName || h.docId.replace("tool:", "")),
+                            score: Math.round(h.score * 100) / 100,
+                        }));
+                    if (provider) data = data.filter(t => t.provider === provider);
+                    return JSON.stringify({ ok: true, query, count: data.length, mode: "vector", tools: data });
                 }
-                filtered = results.filter(t => providerMap.get(t.name) === provider);
+                // Fall through to text search if vector returns nothing
             }
 
-            const data = filtered.map(t => ({
-                name: t.name,
-                description: t.description?.substring(0, 200) ?? "",
-                provider: (() => {
-                    for (const p of toolRegistry.getProviders()) {
-                        if (p.pullAllTools().some(x => x.name === t.name)) return p.getName();
-                    }
-                    return "unknown";
-                })(),
-                schema: (() => {
-                    try {
-                        const s = (t as any).schema as z.ZodTypeAny;
-                        return s ? toJsonSchema(s) : {};
-                    } catch { return {}; }
-                })(),
-            }));
-
-            return JSON.stringify({ ok: true, query, count: data.length, tools: data });
+            // ── Text search ──
+            const results = toolRegistry.searchTools(query);
+            let data = results.map(t => enrich(t.name, t.description?.substring(0, 200)));
+            if (provider) data = data.filter(t => t.provider === provider);
+            return JSON.stringify({ ok: true, query, count: data.length, mode: "text", tools: data });
         } catch (error: any) {
-            return JSON.stringify({ ok: false, error: error.message });
+            logger.warn(`search_tools failed: ${error.message}`);
+            // Ultimate fallback
+            const results = toolRegistry.searchTools(query);
+            return JSON.stringify({
+                ok: true, query, count: results.length, mode: "text",
+                tools: results.map(t => enrich(t.name)),
+            });
         }
     },
 );
