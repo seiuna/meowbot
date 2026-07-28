@@ -14,6 +14,7 @@ import { modelRegistry } from "@meowbot/llm";
 import { Prompts } from "@meowbot/template/prompts";
 import { getLogger } from "@meowbot/utils/logs";
 import type { CompiledStateGraph } from "@langchain/langgraph";
+import { clearSeenSchemas } from "@meowbot/tools/dynamic_tools.js";
 
 const logger = getLogger("ThreadManager");
 
@@ -98,6 +99,7 @@ export async function compactThread(
         "[ThreadManager] Compacted " + threadId +
         ": " + originalCount + " -> " + compactedCount + " messages",
     );
+    clearSeenSchemas(threadId);
 
     return { threadId, originalCount, compactedCount, summary };
 }
@@ -119,5 +121,6 @@ export async function clearThread(
     if (deleteCommands.length > 0) {
         await graph.updateState(config, { messages: deleteCommands });
     }
+    clearSeenSchemas(threadId);
     logger.info("[ThreadManager] Cleared thread " + threadId);
 }

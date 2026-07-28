@@ -10,7 +10,7 @@
 
 import { z } from "zod";
 import { DynamicStructuredTool } from "@langchain/core/tools";
-import { defineEnvToolWithThought } from "./tools.js";
+import { defineEnvToolWithThought, ToolRunConfig } from "./tools.js";
 import { toolRegistry, IToolProvider } from "./tool_registry.js";
 import { getVectorRetriever } from "../vector/index.js";
 import { EmbeddingService } from "../vector/embeddings.js";
@@ -95,6 +95,29 @@ function toJsonSchema(zodType: z.ZodTypeAny): Record<string, any> {
     }
 }
 
+// ── Schema dedup per session ──
+
+/** Track which tools' schemas have already been returned per session (threadId).
+ *  Avoids re-sending large schemas on repeated search_tools calls. */
+const seenSchemasByThread = new Map<string, Set<string>>();
+
+/** Mark a tool's schema as seen for this session. Returns true if it was already seen. */
+function markSchemaSeen(threadId: string, toolName: string): boolean {
+    let seen = seenSchemasByThread.get(threadId);
+    if (!seen) {
+        seen = new Set();
+        seenSchemasByThread.set(threadId, seen);
+    }
+    if (seen.has(toolName)) return true;
+    seen.add(toolName);
+    return false;
+}
+
+/** Clear seen-schema tracking for a thread (called on thread clear/compact). */
+export function clearSeenSchemas(threadId: string): void {
+    seenSchemasByThread.delete(threadId);
+}
+
 // ── search_tools ──
 
 export const searchToolsTool = defineEnvToolWithThought(
@@ -110,7 +133,9 @@ export const searchToolsTool = defineEnvToolWithThought(
             provider: z.string().optional().describe("Limit to this provider name (omit to search all)"),
         }),
     },
-    async ({ query, provider }) => {
+    async ({ query, provider }, runConfig?: ToolRunConfig) => {
+        const threadId = runConfig?.configurable?.session?.threadId ?? "";
+
         // Build provider map for filtering
         const providerMap = new Map<string, string>();
         for (const p of toolRegistry.getProviders()) {
@@ -126,13 +151,30 @@ export const searchToolsTool = defineEnvToolWithThought(
 
         const enrich = (name: string, fallbackDesc?: string) => {
             const tool = toolByName.get(name);
+
+            // Schema: skip if already returned to this session
+            let schema: Record<string, any>;
+            if (threadId && markSchemaSeen(threadId, name)) {
+                schema = { _already_provided: true };
+            } else {
+                schema = (() => {
+                    try {
+                        const s = (tool as any)?.schema;
+                        if (!s) return {};
+                        // Zod schema (has _def with typeName)
+                        if (typeof s._def?.typeName === "string") return toJsonSchema(s as z.ZodTypeAny);
+                        // Plain JSON Schema from MCP tools (has "type" field)
+                        if (typeof s === "object" && "type" in s) return s;
+                        return {};
+                    } catch { return {}; }
+                })();
+            }
+
             return {
                 name,
                 description: tool?.description?.substring(0, 200) ?? (fallbackDesc ?? ""),
                 provider: providerMap.get(name) || "unknown",
-                schema: (() => {
-                    try { const s = (tool as any)?.schema as z.ZodTypeAny; return s ? toJsonSchema(s) : {}; } catch { return {}; }
-                })(),
+                schema,
             };
         };
 
