@@ -142,19 +142,88 @@ export function defineEnvToolWithThought<T extends z.ZodObject<any>>(
  * @param tool         - Existing tool to wrap
  * @param toolConfig   - Optional: perms, isEnabled, required
  */
+/**
+ * Convert a plain JSON Schema object to a Zod schema.
+ * MCP tools provide their schema as JSON Schema, but defineEnvToolWithThought
+ * expects a Zod schema. This bridges the gap.
+ */
+function jsonSchemaToZod(schema: Record<string, any>): z.ZodTypeAny {
+    if (!schema || typeof schema !== "object") return z.any();
+
+    const desc = schema.description;
+    const type = schema.type;
+
+    switch (type) {
+        case "string": {
+            if (schema.enum) {
+                const e = z.enum(schema.enum as [string, ...string[]]);
+                return desc ? e.describe(desc) : e;
+            }
+            const s = z.string();
+            return desc ? s.describe(desc) : s;
+        }
+        case "number":
+        case "integer": {
+            let s = type === "integer" ? z.number().int() : z.number();
+            if (schema.minimum != null) s = s.min(schema.minimum);
+            if (schema.maximum != null) s = s.max(schema.maximum);
+            return desc ? s.describe(desc) : s;
+        }
+        case "boolean":
+            return desc ? z.boolean().describe(desc) : z.boolean();
+        case "array": {
+            const itemSchema = schema.items ? jsonSchemaToZod(schema.items) : z.any();
+            let s = z.array(itemSchema);
+            return desc ? s.describe(desc) : s;
+        }
+        case "object": {
+            if (!schema.properties) {
+                const s = z.record(z.string(), z.any());
+                return desc ? s.describe(desc) : s;
+            }
+            const shape: Record<string, z.ZodTypeAny> = {};
+            const required = new Set<string>(schema.required ?? []);
+            for (const [key, propSchema] of Object.entries(schema.properties)) {
+                let field = jsonSchemaToZod(propSchema as Record<string, any>);
+                if (!required.has(key)) field = field.optional();
+                shape[key] = field;
+            }
+            const s = z.object(shape);
+            return desc ? s.describe(desc) : s;
+        }
+        default:
+            return z.any();
+    }
+}
+
+/** Check if a schema object is a plain JSON Schema (not a Zod schema). */
+function isJsonSchemaObject(schema: unknown): schema is Record<string, any> {
+    return (
+        typeof schema === "object" &&
+        schema !== null &&
+        "type" in (schema as Record<string, any>) &&
+        !("_def" in (schema as Record<string, any>))
+    );
+}
+
 export function wrapToolWithThought(
     tool: DynamicStructuredTool,
     toolConfig?: ToolPermsConfig,
 ): EnvTool {
+    // MCP tools provide their schema as JSON Schema; convert to Zod
+    const rawSchema = (tool as any).schema;
+    const zodSchema: z.ZodObject<any> = isJsonSchemaObject(rawSchema)
+        ? jsonSchemaToZod(rawSchema) as z.ZodObject<any>
+        : (rawSchema as z.ZodObject<any>) ?? z.object({}).passthrough();
+
     const wrapped = defineEnvToolWithThought(
         {
             name: tool.name,
             description: tool.description,
-            schema: tool.schema as z.ZodObject<any>,
-
+            schema: zodSchema,
         },
         async (input, runConfig) => {
-            const result = await tool.invoke(input as z.infer<typeof tool.schema>);
+            const result = await tool.invoke(input);
             return typeof result === "string" ? result : JSON.stringify(result);
         },
         toolConfig,
