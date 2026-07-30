@@ -81,9 +81,13 @@ export const ModelCapabilitySchema = z.union([z.enum(["vision", "audio", "tts", 
 export type ModelCapability = z.infer<typeof ModelCapabilitySchema>;
 
 export const ProviderConfigSchema = z.object({
-    vendor: VendorSchema,
+    /** Preset name (e.g. "deepseek", "openai", "ollama"). Fills vendor + baseURL automatically. */
+    preset: z.string(),
     apiKey: z.string(),
+    /** Override the preset's default baseURL (optional) */
     baseURL: z.string().optional(),
+    /** Vendor is auto-resolved from preset, but can be overridden for custom setups */
+    vendor: VendorSchema.optional(),
 });
 export type ProviderConfig = z.infer<typeof ProviderConfigSchema>;
 
@@ -100,13 +104,26 @@ export const ModelOptionsSchema = z.object({
 });
 export type ModelOptions = z.infer<typeof ModelOptionsSchema>;
 
-export const ChatModelConfigSchema = z.object({
-    providerName: z.string(),
-    options: ModelOptionsSchema,
+/** Per-role model override: only specify what differs from defaultModel. */
+export const ChatModelOverrideSchema = z.object({
+    /** Override model name for this role */
+    model: z.string().optional(),
+    /** Override provider for this role (defaults to "default") */
+    providerName: z.string().optional(),
+    temperature: z.number().optional(),
+    maxRetries: z.number().optional(),
+    modelKwargs: z.record(z.string(), z.unknown()).optional(),
+    disableThinking: z.boolean().optional(),
+    capabilities: z.array(ModelCapabilitySchema).optional(),
 });
-export type ChatModelConfig = z.infer<typeof ChatModelConfigSchema>;
+export type ChatModelOverride = z.infer<typeof ChatModelOverrideSchema>;
 
-export const ChatModelsConfigSchema = z.record(z.string(), ChatModelConfigSchema);
+export const ChatModelsConfigSchema = z.object({
+    /** Default model name (from the provider's preset models) used for all roles */
+    defaultModel: z.string(),
+    /** Per-role overrides — only specify what differs from the default */
+    overrides: z.record(z.string(), ChatModelOverrideSchema).optional(),
+});
 export type ChatModelsConfig = z.infer<typeof ChatModelsConfigSchema>;
 
 export const EmbeddingsOptionsSchema = z.object({
