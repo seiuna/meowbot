@@ -35,7 +35,7 @@ export default defineConfig({
   },
   resolve: {
     alias: {
-      '@meowbot': path.resolve(__dirname, './src/meowbot')
+      '@meowbot': path.resolve(__dirname, './src')
     }
   }
 });

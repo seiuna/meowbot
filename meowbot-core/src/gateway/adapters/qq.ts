@@ -80,9 +80,12 @@ export class QQAdapter extends BaseAdapter {
                         break;
                     case "image":
                     case "voice": {
-                        // Resolve fileId → base64 data URI, fall back to raw string for URLs
-                        const resolved = (await fs.getBase64(msg.data)) ?? msg.data;
-                        normalSegments.push({ type: "image" as const, data: { file: resolved } });
+                        if (!await fs.isAvailable(msg.data)) {
+                            logger.warn(`File not available, skipping: ${msg.data}`);
+                            break;
+                        }
+                        const resolved = await fs.getBase64(msg.data, { accept: ["image/png","image/jpeg","image/gif"] });
+                        normalSegments.push({ type: "image" as const, data: { file: resolved ?? msg.data } });
                         break;
                     }
                     case "at":
@@ -92,7 +95,10 @@ export class QQAdapter extends BaseAdapter {
                         normalSegments.push({ type: "reply" as const, data: { id: msg.data } });
                         break;
                     case "file": {
-                        // Resolve fileId → { buffer, name } for upload
+                        if (!await fs.isAvailable(msg.data)) {
+                            logger.warn(`File not available, skipping: ${msg.data}`);
+                            break;
+                        }
                         const buf = await fs.getBuffer(msg.data);
                         const meta = fs.getMeta(msg.data);
                         if (buf) {

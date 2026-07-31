@@ -10,9 +10,10 @@
  *   ws/<workspaceId>/<path> — workspace file, resolved deterministically
  */
 
-import { randomUUID } from "crypto";
+import { randomUUID, createHash } from "crypto";
 import { readFile } from "node:fs/promises";
 import { basename } from "node:path";
+import sharp from "sharp";
 import { getLogger } from "../utils/logs.js";
 import { FileMeta } from "./types.js";
 import type { BaseFile } from "../gateway/adapters/types.js";
@@ -58,6 +59,35 @@ function detectMime(filePath: string): string {
     return MIME_MAP[ext] ?? "application/octet-stream";
 }
 
+// ── Image conversion ──
+
+/** Supported target image formats for auto-conversion. Order matters: first is the default fallback. */
+const IMAGE_FORMATS = ["png", "jpeg", "gif", "webp"] as const;
+
+type ImageFormat = keyof typeof FORMAT_MIME;
+/** MIME type mapping for image formats */
+const FORMAT_MIME = {
+    png: "image/png",
+    jpeg: "image/jpeg",
+    gif: "image/gif",
+    webp: "image/webp",
+} as const;
+
+type ImageMime = typeof FORMAT_MIME[ImageFormat]; 
+
+function normalizeFormat(raw: string): ImageFormat {
+    const normalized = raw.toLowerCase().replace("jpg", "jpeg");
+    if (IMAGE_FORMATS.includes(normalized as ImageFormat)) return normalized as ImageFormat;
+    return IMAGE_FORMATS[0]; // fallback to first (png)
+}
+
+function mimeToFormat(mime: string): ImageFormat | null {
+    for (const [fmt, m] of Object.entries(FORMAT_MIME)) {
+        if (mime.includes(m)) return fmt as ImageFormat;
+    }
+    return null;
+}
+
 // ── FileRecord — in-memory file backed by a Buffer ──
 
 class FileRecord {
@@ -91,6 +121,14 @@ interface RegistryEntry {
     meta: FileMeta;
 }
 
+// ── Download result ──
+
+interface DownloadResult {
+    dataUri: string;
+    mime: string;
+    buffer: Buffer;
+}
+
 // ── FileService ──
 
 export class FileService {
@@ -98,6 +136,12 @@ export class FileService {
 
     /** File registry: fileId → { file, meta } */
     private registry = new Map<string, RegistryEntry>();
+
+    /** Conversion cache: `${fileId}:${targetFormat}` → base64 data URI */
+    private convertCache = new Map<string, string>();
+
+    /** Download cache: URL → DownloadResult (avoids re-downloading) */
+    private downloadCache = new Map<string, DownloadResult>();
 
     private constructor() {}
 
@@ -246,14 +290,22 @@ export class FileService {
     //  Retrieval
     // ═══════════════════════════════════════════════════════════
 
-    public async getBase64(fileId: string): Promise<string | null> {
+    public async getBase64(
+        fileId: string,
+        options?: { accept?: ImageMime[] },
+    ): Promise<string | null> {
         try {
-            if (fileId.startsWith("file_")) return await this.getRegistryBase64(fileId);
-            if (fileId.startsWith("ws/")) return await this.getWorkspaceBase64(fileId);
-            // Fallback: pass through raw URLs
-            if (fileId.startsWith("http://") || fileId.startsWith("https://")) return fileId;
-            logger.warn(`Unknown fileId scheme: ${fileId}`);
-            return null;
+            const file = await this.download(fileId);
+            if (!file) return null;
+
+            // No format requirement — return original
+            if (!options?.accept?.length) return file.dataUri;
+
+            // Original format is in the accept list — return as-is
+            if (options.accept.includes(file.mime as ImageMime)) return file.dataUri;
+
+            // Convert to the first accepted format
+            return this.convertBase64(file.dataUri, normalizeFormat(options.accept[0]));
         } catch (error) {
             logger.error(`Failed to get base64 for ${fileId}: ${error}`);
             return null;
@@ -262,10 +314,8 @@ export class FileService {
 
     public async getBuffer(fileId: string): Promise<Buffer | null> {
         try {
-            if (fileId.startsWith("file_")) return await this.getRegistryBuffer(fileId);
-            if (fileId.startsWith("ws/")) return await this.getWorkspaceBuffer(fileId);
-            logger.warn(`Unknown fileId scheme: ${fileId}`);
-            return null;
+            const file = await this.download(fileId);
+            return file?.buffer ?? null;
         } catch (error) {
             logger.error(`Failed to get buffer for ${fileId}: ${error}`);
             return null;
@@ -305,29 +355,182 @@ export class FileService {
         return deleted;
     }
 
+    /**
+     * Check whether a file exists and is readable without loading its content.
+     *
+     * - `file_*` — checks in-memory registry
+     * - `ws/*` — checks filesystem via `access()`
+     * - `http://` / `https://` — sends a HEAD request
+     */
+    public async isAvailable(fileId: string): Promise<boolean> {
+        if (fileId.startsWith("file_")) return this.registry.has(fileId);
+
+        if (fileId.startsWith("ws/")) {
+            const parsed = this.parseWorkspaceFileId(fileId);
+            if (!parsed) return false;
+            const ws = WorkspaceManager.getInstance().get(parsed.workspaceId);
+            if (!ws) return false;
+            try {
+                return await ws.exists(parsed.filePath);
+            } catch {
+                return false;
+            }
+        }
+
+        if (fileId.startsWith("http://") || fileId.startsWith("https://")) {
+            try {
+                const head = await fetch(fileId, { method: "HEAD", signal: AbortSignal.timeout(5000) });
+                return head.ok;
+            } catch {
+                return false;
+            }
+        }
+
+        return false;
+    }
+
     public clear(): void {
         this.registry.clear();
         logger.debug("Cleared all registered files");
     }
 
     // ═══════════════════════════════════════════════════════════
-    //  Private helpers
+    //  Unified download
     // ═══════════════════════════════════════════════════════════
+
+    /**
+     * Unified download entry point.
+     *
+     * Resolves any fileId scheme to a {@link DownloadResult} containing
+     * the data URI, original MIME type, and raw Buffer.
+     *
+     * Results from URL downloads are cached to avoid redundant network requests.
+     */
+    private async download(fileId: string): Promise<DownloadResult | null> {
+        // URL downloads are cached
+        if (fileId.startsWith("http://") || fileId.startsWith("https://")) {
+            const cached = this.downloadCache.get(fileId);
+            if (cached) return cached;
+
+            try {
+                const resp = await fetch(fileId, {
+                    signal: AbortSignal.timeout(30000),
+                });
+                if (!resp.ok) return null;
+                const buffer = Buffer.from(await resp.arrayBuffer());
+                const mime = resp.headers.get("content-type") ?? "application/octet-stream";
+                const dataUri = `data:${mime};base64,${buffer.toString("base64")}`;
+                const result: DownloadResult = { dataUri, mime, buffer };
+
+                // Cache (cap at 50 entries)
+                if (this.downloadCache.size >= 50) {
+                    const firstKey = this.downloadCache.keys().next().value;
+                    if (firstKey) this.downloadCache.delete(firstKey);
+                }
+                this.downloadCache.set(fileId, result);
+                return result;
+            } catch {
+                return null;
+            }
+        }
+
+        // Registry files
+        if (fileId.startsWith("file_")) {
+            const entry = this.registry.get(fileId);
+            if (!entry) { logger.warn(`File not found: ${fileId}`); return null; }
+            const buffer = await entry.file.toBuffer();
+            const dataUri = await entry.file.toBase64();
+            return { dataUri, mime: entry.meta.mimeType, buffer };
+        }
+
+        // Workspace files
+        if (fileId.startsWith("ws/")) {
+            const buffer = await this.getWorkspaceBuffer(fileId);
+            if (!buffer) return null;
+            const parsed = this.parseWorkspaceFileId(fileId);
+            const mime = parsed ? detectMime(parsed.filePath) : "application/octet-stream";
+            return {
+                dataUri: `data:${mime};base64,${buffer.toString("base64")}`,
+                mime,
+                buffer,
+            };
+        }
+
+        logger.warn(`Unknown fileId scheme: ${fileId}`);
+        return null;
+    }
+
+    /**
+     * Convert a base64 data URI to the target image format.
+     * Caches results by full content hash → target format.
+     */
+    private async convertBase64(
+        dataUri: string,
+        targetFormat: ImageFormat,
+    ): Promise<string> {
+        const targetMime = FORMAT_MIME[targetFormat];
+
+        // Parse source
+        const match = dataUri.match(/^data:([^;]*);base64,(.+)$/is);
+        if (!match) {
+            logger.warn("Cannot convert: not a valid data URI");
+            return dataUri;
+        }
+
+        const sourceMime = match[1];
+        const sourceFormat = mimeToFormat(sourceMime);
+
+        // Already the target format — no conversion needed
+        if (sourceFormat === targetFormat) return dataUri;
+
+        const rawBase64 = match[2];
+        const hash = createHash("sha256").update(rawBase64).digest("hex");
+        const cacheKey = `${hash}:${targetFormat}`;
+
+        // Check conversion cache
+        const cached = this.convertCache.get(cacheKey);
+        if (cached) return cached;
+
+        try {
+            const inputBuffer = Buffer.from(rawBase64, "base64");
+            let sharpInstance = sharp(inputBuffer);
+
+            // Apply format-specific options
+            switch (targetFormat) {
+                case "jpeg":
+                    sharpInstance = sharpInstance.jpeg({ quality: 90 });
+                    break;
+                case "png":
+                    sharpInstance = sharpInstance.png({ compressionLevel: 6 });
+                    break;
+                case "webp":
+                    sharpInstance = sharpInstance.webp({ quality: 90 });
+                    break;
+                case "gif":
+                    sharpInstance = sharpInstance.gif();
+                    break;
+            }
+
+            const outputBuffer = await sharpInstance.toBuffer();
+            const result = `data:${targetMime};base64,${outputBuffer.toString("base64")}`;
+
+            // Cache (cap at 50 entries to avoid memory leak)
+            if (this.convertCache.size >= 50) {
+                const firstKey = this.convertCache.keys().next().value;
+                if (firstKey) this.convertCache.delete(firstKey);
+            }
+            this.convertCache.set(cacheKey, result);
+
+            logger.debug(`Converted image: ${sourceMime} → ${targetMime}`);
+            return result;
+        } catch (error) {
+            logger.warn(`Image conversion failed (${sourceMime} → ${targetFormat}): ${error}, returning original`);
+            return dataUri;
+        }
+    }
 
     private makeFileId(): string {
         return `file_${randomUUID().replace(/-/g, "").substring(0, 12)}`;
-    }
-
-    private async getRegistryBase64(fileId: string): Promise<string | null> {
-        const entry = this.registry.get(fileId);
-        if (!entry) { logger.warn(`File not found: ${fileId}`); return null; }
-        return entry.file.toBase64();
-    }
-
-    private async getRegistryBuffer(fileId: string): Promise<Buffer | null> {
-        const entry = this.registry.get(fileId);
-        if (!entry) { logger.warn(`File not found: ${fileId}`); return null; }
-        return entry.file.toBuffer();
     }
 
     // ── Private: Workspace file access ──
@@ -368,14 +571,6 @@ export class FileService {
         }
     }
 
-    private async getWorkspaceBase64(fileId: string): Promise<string | null> {
-        const buffer = await this.getWorkspaceBuffer(fileId);
-        if (!buffer) return null;
-
-        const parsed = this.parseWorkspaceFileId(fileId);
-        const mime = parsed ? detectMime(parsed.filePath) : "application/octet-stream";
-        return `data:${mime};base64,${buffer.toString("base64")}`;
-    }
 }
 
 export function getFileService(): FileService {

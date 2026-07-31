@@ -46,6 +46,7 @@
     "pdf-parse": "^1.1.1",
     "puppeteer": "^25.1.0",
     "reflect-metadata": "^0.2.2",
+    "sharp": "^0.35.3",
     "ts-node": "^10.9.2",
     "undici": "^7.25.0",
     "zod": "^4.4.2"
