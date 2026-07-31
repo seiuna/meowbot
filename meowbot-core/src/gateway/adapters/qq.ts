@@ -78,14 +78,23 @@ export class QQAdapter extends BaseAdapter {
                     case "text":
                         normalSegments.push({ type: "text" as const, data: { text: msg.data } });
                         break;
-                    case "image":
-                    case "voice": {
+                    case "image": {
                         if (!await fs.isAvailable(msg.data)) {
                             logger.warn(`File not available, skipping: ${msg.data}`);
                             break;
                         }
                         const resolved = await fs.getBase64(msg.data, { accept: ["image/png","image/jpeg","image/gif"] });
                         normalSegments.push({ type: "image" as const, data: { file: resolved ?? msg.data } });
+                        break;
+                    }
+                    case "voice": {
+                        if (!await fs.isAvailable(msg.data)) {
+                            logger.warn(`File not available, skipping: ${msg.data}`);
+                            break;
+                        }
+                        // Voice: pass through original audio, no image conversion
+                        const resolved = await fs.getBase64(msg.data);
+                        normalSegments.push({ type: "record" as const, data: { file: resolved ?? msg.data } });
                         break;
                     }
                     case "at":
