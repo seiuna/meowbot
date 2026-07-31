@@ -271,8 +271,22 @@ export const decorateReplyTool = defineEnvToolWithThought(
         const deco: PendingDecoration = {};
         if (input.reply) deco.reply = input.reply;
         if (input.at && input.at.length > 0) deco.at = input.at;
-        if (input.file && input.file.length > 0) deco.file = input.file;
-        if (input.image && input.image.length > 0) deco.image = input.image;
+        if (input.file && input.file.length > 0) {
+            const fs = getFileService();
+            const available = await Promise.all(input.file.map(id => fs.isAvailable(id)));
+            if (available.some(v => !v)) {
+                return JSON.stringify({ ok: false, error: "Some files are not available.", files: input.file });
+            }
+            deco.file = input.file;
+        }
+        if (input.image && input.image.length > 0) {
+            const fs = getFileService();
+            const available = await Promise.all(input.image.map(id => fs.isAvailable(id)));
+            if (available.some(v => !v)) {
+                return JSON.stringify({ ok: false, error: "Some images are not available.", images: input.image });
+            }
+            deco.image = input.image;
+        }
 
         if (Object.keys(deco).length === 0) {
             return JSON.stringify({ ok: true, decorated: false, message: "No decorations set." });
