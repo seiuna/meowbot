@@ -64,7 +64,6 @@ function detectMime(filePath: string): string {
 /** Supported target image formats for auto-conversion. Order matters: first is the default fallback. */
 const IMAGE_FORMATS = ["png", "jpeg", "gif", "webp"] as const;
 
-type ImageFormat = keyof typeof FORMAT_MIME;
 /** MIME type mapping for image formats */
 const FORMAT_MIME = {
     png: "image/png",
@@ -73,7 +72,8 @@ const FORMAT_MIME = {
     webp: "image/webp",
 } as const;
 
-type ImageMime = typeof FORMAT_MIME[ImageFormat]; 
+type ImageFormat = keyof typeof FORMAT_MIME;
+type ImageMime = typeof FORMAT_MIME[ImageFormat];
 
 function normalizeFormat(raw: string): ImageFormat {
     const normalized = raw.toLowerCase().replace("jpg", "jpeg");
@@ -137,7 +137,7 @@ export class FileService {
     /** File registry: fileId → { file, meta } */
     private registry = new Map<string, RegistryEntry>();
 
-    /** Conversion cache: `${fileId}:${targetFormat}` → base64 data URI */
+    /** Conversion cache: `${sha256(content)}:${targetFormat}` → base64 data URI */
     private convertCache = new Map<string, string>();
 
     /** Download cache: URL → DownloadResult (avoids re-downloading) */
