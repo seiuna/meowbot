@@ -8,6 +8,11 @@ import { getFileService } from "../../files/index.js";
 
 const logger = getLogger("QQAdapter");
 
+/** Convert a data: URI to OneBot's base64:// encoding. Passes URLs through unchanged. */
+function toOneBotFile(file: string): string {
+    return file.replace(/^data:[^;]+;base64,/, "base64://");
+}
+
 const MAX_REFERENCE_DEPTH = 5;
 
 const DEFAULT_NAPLINK_CONFIG: NapLinkConfig = {
@@ -79,22 +84,31 @@ export class QQAdapter extends BaseAdapter {
                         normalSegments.push({ type: "text" as const, data: { text: msg.data } });
                         break;
                     case "image": {
-                        if (!await fs.isAvailable(msg.data)) {
+                        // URL availability is decided by download() itself (HEAD is unreliable)
+                        if (!msg.data.startsWith("http") && !(await fs.isAvailable(msg.data))) {
                             logger.warn(`File not available, skipping: ${msg.data}`);
                             break;
                         }
                         const resolved = await fs.getBase64(msg.data, { accept: ["image/png","image/jpeg","image/gif"] });
-                        normalSegments.push({ type: "image" as const, data: { file: resolved ?? msg.data } });
+                        if (!resolved) {
+                            logger.warn(`Cannot resolve image, skipping: ${msg.data}`);
+                            break;
+                        }
+                        normalSegments.push({ type: "image" as const, data: { file: toOneBotFile(resolved) } });
                         break;
                     }
                     case "voice": {
-                        if (!await fs.isAvailable(msg.data)) {
+                        if (!msg.data.startsWith("http") && !(await fs.isAvailable(msg.data))) {
                             logger.warn(`File not available, skipping: ${msg.data}`);
                             break;
                         }
                         // Voice: pass through original audio, no image conversion
                         const resolved = await fs.getBase64(msg.data);
-                        normalSegments.push({ type: "record" as const, data: { file: resolved ?? msg.data } });
+                        if (!resolved) {
+                            logger.warn(`Cannot resolve voice, skipping: ${msg.data}`);
+                            break;
+                        }
+                        normalSegments.push({ type: "record" as const, data: { file: toOneBotFile(resolved) } });
                         break;
                     }
                     case "at":
@@ -104,7 +118,7 @@ export class QQAdapter extends BaseAdapter {
                         normalSegments.push({ type: "reply" as const, data: { id: msg.data } });
                         break;
                     case "file": {
-                        if (!await fs.isAvailable(msg.data)) {
+                        if (!msg.data.startsWith("http") && !(await fs.isAvailable(msg.data))) {
                             logger.warn(`File not available, skipping: ${msg.data}`);
                             break;
                         }

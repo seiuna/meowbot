@@ -9,7 +9,7 @@
  *   - Image conversion dispatch
  */
 
-import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach, type Mock } from "vitest";
 
 // Mock sharp to avoid native module resolution issues
 vi.mock("sharp", () => {
@@ -23,6 +23,7 @@ vi.mock("sharp", () => {
     return { default: vi.fn(() => mockInstance) };
 });
 
+import sharp from "sharp";
 import { FileService } from "./file.service.js";
 
 // ── Helpers ──
@@ -46,6 +47,8 @@ describe("FileService", () => {
 
     afterEach(() => {
         FileService.resetInstance();
+        vi.unstubAllGlobals();
+        vi.useRealTimers();
     });
 
     // ═══════════════════════════════════════════════════════════
@@ -182,14 +185,14 @@ describe("FileService", () => {
             spy.mockRestore();
         });
 
-        it("should pass the first accept format to convertBase64", async () => {
+        it("should pass the first accepted format to convertBase64", async () => {
             const fileId = fs.fromBase64(PNG_DATA_URI, "img.png");
             const spy = vi.spyOn(fs as any, "convertBase64").mockResolvedValue("data:image/webp;base64,conv");
 
             const result = await fs.getBase64(fileId, { accept: ["image/webp", "image/jpeg"] });
 
-            // The mock should have been called, and result is the mocked value
             expect(result).toBe("data:image/webp;base64,conv");
+            expect(spy).toHaveBeenCalledWith(PNG_DATA_URI, "webp");
             spy.mockRestore();
         });
 
@@ -345,6 +348,152 @@ describe("FileService", () => {
             const fileId = fs.fromBuffer(Buffer.from("data"), "Makefile");
             const meta = fs.getMeta(fileId);
             expect(meta?.mimeType).toBe("application/octet-stream");
+        });
+    });
+
+    // ═══════════════════════════════════════════════════════════
+    //  Real conversion via sharp
+    // ═══════════════════════════════════════════════════════════
+
+    describe("getBase64() — real conversion", () => {
+        it("should convert to the first accepted format (jpeg)", async () => {
+            const fileId = fs.fromBase64(PNG_DATA_URI, "img.png");
+            const result = await fs.getBase64(fileId, { accept: ["image/jpeg"] });
+            expect(result).toMatch(/^data:image\/jpeg;base64,/);
+        });
+
+        it("should convert to webp when accept lists webp first", async () => {
+            const fileId = fs.fromBase64(PNG_DATA_URI, "img.png");
+            const result = await fs.getBase64(fileId, { accept: ["image/webp", "image/jpeg"] });
+            expect(result).toMatch(/^data:image\/webp;base64,/);
+        });
+
+        it("should return the original data URI when conversion fails", async () => {
+            const sharpMock = sharp as unknown as Mock;
+            const originalImpl = sharpMock.getMockImplementation();
+            try {
+                sharpMock.mockImplementation(() => ({
+                    png: () => ({ toBuffer: vi.fn().mockRejectedValue(new Error("boom")) }),
+                    jpeg: () => ({ toBuffer: vi.fn().mockRejectedValue(new Error("boom")) }),
+                    webp: () => ({ toBuffer: vi.fn().mockRejectedValue(new Error("boom")) }),
+                    gif: () => ({ toBuffer: vi.fn().mockRejectedValue(new Error("boom")) }),
+                }));
+
+                const fileId = fs.fromBase64(PNG_DATA_URI, "img.png");
+                const result = await fs.getBase64(fileId, { accept: ["image/jpeg"] });
+
+                expect(result).toBe(PNG_DATA_URI);
+            } finally {
+                if (originalImpl) sharpMock.mockImplementation(originalImpl);
+            }
+        });
+    });
+
+    // ═══════════════════════════════════════════════════════════
+    //  Registry meta with octet-stream MIME
+    // ═══════════════════════════════════════════════════════════
+
+    describe("getBase64() — registry meta with octet-stream mime", () => {
+        it("should use the real MIME from the data URI for accept checks", async () => {
+            const baseFile = {
+                getFileName: () => "unknown",
+                getFileSize: () => PNG_DATA_URI.length,
+                toBuffer: async () => Buffer.from(PNG_DATA_URI.split(",")[1], "base64"),
+                toBase64: async () => PNG_DATA_URI,
+            } as any;
+
+            const fileId = fs.register(baseFile);
+            expect(fs.getMeta(fileId)?.mimeType).toBe("application/octet-stream");
+
+            const spy = vi.spyOn(fs as any, "convertBase64");
+            const result = await fs.getBase64(fileId, { accept: ["image/png", "image/jpeg"] });
+
+            expect(result).toBe(PNG_DATA_URI);
+            expect(spy).not.toHaveBeenCalled();
+            spy.mockRestore();
+        });
+    });
+
+    // ═══════════════════════════════════════════════════════════
+    //  URL downloads
+    // ═══════════════════════════════════════════════════════════
+
+    describe("getBase64() — URL downloads", () => {
+        function stubFetch(ok: boolean = true, contentType: string = "image/png"): ReturnType<typeof vi.fn> {
+            const fetchMock = vi.fn().mockResolvedValue({
+                ok,
+                headers: { get: () => contentType },
+                arrayBuffer: async () => new Uint8Array([1, 2, 3]).buffer,
+            });
+            vi.stubGlobal("fetch", fetchMock);
+            return fetchMock;
+        }
+
+        it("should download a URL and cache the result", async () => {
+            const fetchMock = stubFetch();
+
+            const first = await fs.getBase64("https://example.com/a.png");
+            const second = await fs.getBase64("https://example.com/a.png");
+
+            expect(first).toMatch(/^data:image\/png;base64,/);
+            expect(second).toBe(first);
+            expect(fetchMock).toHaveBeenCalledTimes(1);
+        });
+
+        it("should send a User-Agent header when downloading", async () => {
+            const fetchMock = stubFetch();
+
+            await fs.getBase64("https://example.com/a.png");
+
+            const [url, init] = fetchMock.mock.calls[0];
+            expect(url).toBe("https://example.com/a.png");
+            expect((init as RequestInit).headers).toMatchObject({
+                "User-Agent": expect.stringContaining("MEOWBOT"),
+            });
+        });
+
+        it("should return null when the URL responds with an error", async () => {
+            stubFetch(false, "text/html");
+            const result = await fs.getBase64("https://example.com/missing.png");
+            expect(result).toBeNull();
+        });
+
+        it("should return null when the URL download throws", async () => {
+            vi.stubGlobal("fetch", vi.fn().mockRejectedValue(new Error("ECONNREFUSED")));
+            expect(await fs.getBase64("https://example.com/x.png")).toBeNull();
+        });
+
+        it("should re-download after the cache TTL expires", async () => {
+            vi.useFakeTimers();
+            const fetchMock = stubFetch();
+
+            await fs.getBase64("https://example.com/a.png");
+            vi.advanceTimersByTime(11 * 60 * 1000);
+            await fs.getBase64("https://example.com/a.png");
+
+            expect(fetchMock).toHaveBeenCalledTimes(2);
+        });
+
+        it("should evict the oldest entry when the cache is full", async () => {
+            const fetchMock = stubFetch();
+
+            for (let i = 0; i < 51; i++) {
+                await fs.getBase64(`https://example.com/img-${i}.png`);
+            }
+
+            // The oldest entry was evicted, so fetching it again hits the network
+            await fs.getBase64("https://example.com/img-0.png");
+            expect(fetchMock).toHaveBeenCalledTimes(52);
+        });
+
+        it("should clear the download cache in clear()", async () => {
+            const fetchMock = stubFetch();
+
+            await fs.getBase64("https://example.com/a.png");
+            fs.clear();
+            await fs.getBase64("https://example.com/a.png");
+
+            expect(fetchMock).toHaveBeenCalledTimes(2);
         });
     });
 });
