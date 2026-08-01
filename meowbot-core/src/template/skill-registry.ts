@@ -43,7 +43,9 @@ export interface SkillRegistryConfig {
 const DEFAULT_CONFIG: SkillRegistryConfig = {
     skillsDir: resolve(ROOT, "skills"),
     templatesDir: resolve(ROOT, "templates"),
-    promptsDir: resolve(ROOT, "prompts"),
+    // The "prompt" category reads the project-root agents/ directory
+    // (folder-per-agent with AGENT.md), which is where sub-agent prompts live.
+    promptsDir: resolve(ROOT, "agents"),
 };
 
 class SkillRegistryStore {

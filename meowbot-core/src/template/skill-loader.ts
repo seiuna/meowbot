@@ -38,6 +38,22 @@ async function loadFewShot(dirPath: string): Promise<FewShotPair[]> {
     }
 }
 
+/**
+ * Find the doc file for a folder entry: `skill.md` (skills/templates) or
+ * `AGENT.md` (agents loaded as prompts). Case-insensitive lookup.
+ */
+async function findDocFile(dirPath: string): Promise<string | null> {
+    let entries: string[];
+    try {
+        entries = await readdir(dirPath);
+    } catch {
+        return null;
+    }
+    const match = entries.find(e => e.toLowerCase() === "skill.md")
+        ?? entries.find(e => e.toLowerCase() === "agent.md");
+    return match ? join(dirPath, match) : null;
+}
+
 function makeSkillInstance(meta: SkillMeta, body: string, fewShot: FewShotPair[]): BaseSkill {
     return meta.category === "template"
         ? new Template(meta, body, fewShot)
@@ -58,11 +74,16 @@ export async function loadSingleSkill(
 ): Promise<{ skill: BaseSkill; errors: string[] } | null> {
     const folderName = basename(dirPath);
 
+    const docFile = await findDocFile(dirPath);
+    if (!docFile) {
+        logger.debug(`Skipping ${folderName}: no skill.md/AGENT.md found`);
+        return null;
+    }
     let rawPrompt: string;
     try {
-        rawPrompt = await readFile(join(dirPath, "skill.md"), "utf-8");
+        rawPrompt = await readFile(docFile, "utf-8");
     } catch {
-        logger.debug(`Skipping ${folderName}: no skill.md found`);
+        logger.debug(`Skipping ${folderName}: cannot read ${docFile}`);
         return null;
     }
 

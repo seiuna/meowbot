@@ -66,8 +66,10 @@ export function buildSkillMeta(
 
     // Warn on unknown keys so typos like "requried-providers" surface.
     const KNOWN_KEYS = new Set([
-        "name", "description", "requiredProviders", "required-providers",
-        "asSubAgent", "as-sub-agent", "category", "version", "tags", "sourceDir",
+        "name", "description", "tools",
+        "requiredProviders", "required-providers",
+        "asSubAgent", "as-sub-agent", "as_sub_agent", "sub-agent",
+        "category", "version", "tags", "sourceDir",
     ]);
     for (const key of Object.keys(raw)) {
         if (!KNOWN_KEYS.has(key)) {
@@ -81,9 +83,27 @@ export function buildSkillMeta(
     if (normalized.asSubAgent === undefined && normalized["as-sub-agent"] !== undefined) {
         normalized.asSubAgent = normalized["as-sub-agent"];
     }
+    if (normalized.asSubAgent === undefined && normalized["as_sub_agent"] !== undefined) {
+        normalized.asSubAgent = normalized["as_sub_agent"];
+    }
+    if (normalized.asSubAgent === undefined && normalized["sub-agent"] !== undefined) {
+        normalized.asSubAgent = normalized["sub-agent"];
+    }
+
+    // Treat empty YAML values (null / "") as absent so bare keys like
+    // `required-providers:` do not fail array/boolean validation.
+    for (const key of ["name", "description", "requiredProviders", "tools", "asSubAgent", "version"]) {
+        if (normalized[key] === null || normalized[key] === "") delete normalized[key];
+    }
 
     if (typeof normalized.requiredProviders === "string") {
         normalized.requiredProviders = (normalized.requiredProviders as string)
+            .split(",")
+            .map(s => s.trim())
+            .filter(Boolean);
+    }
+    if (typeof normalized.tools === "string") {
+        normalized.tools = (normalized.tools as string)
             .split(",")
             .map(s => s.trim())
             .filter(Boolean);
@@ -104,6 +124,9 @@ export function buildSkillMeta(
     const meta: SkillMeta = {
         name: typeof raw.name === "string" && raw.name ? raw.name : fallback.name,
         description: typeof raw.description === "string" ? raw.description : "",
+        tools: Array.isArray(normalized.tools)
+            ? normalized.tools.filter((t): t is string => typeof t === "string")
+            : [],
         requiredProviders: Array.isArray(normalized.requiredProviders)
             ? normalized.requiredProviders.filter((p): p is string => typeof p === "string")
             : [],

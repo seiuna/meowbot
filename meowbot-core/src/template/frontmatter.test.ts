@@ -9,6 +9,9 @@ description: A test skill
 required-providers:
   - Workspace
   - System
+tools:
+  - read_file
+  - write_file
 as-sub-agent: true
 tags:
   - foo
@@ -21,6 +24,7 @@ You are a test skill.
         expect(doc.error).toBeUndefined();
         expect(doc.meta.name).toBe("my-skill");
         expect(doc.meta["required-providers"]).toEqual(["Workspace", "System"]);
+        expect(doc.meta.tools).toEqual(["read_file", "write_file"]);
         expect(doc.meta["as-sub-agent"]).toBe(true);
         expect(doc.meta.tags).toEqual(["foo", "bar"]);
         expect(doc.body).toBe("You are a test skill.");
@@ -56,12 +60,29 @@ describe("buildSkillMeta", () => {
         expect(meta.requiredProviders).toEqual(["Workspace", "System"]);
     });
 
+    it("normalizes comma-string tools", () => {
+        const { meta, errors } = buildSkillMeta(
+            { tools: "read_file, write_file " },
+            { name: "s", category: "skill" },
+        );
+        expect(errors).toEqual([]);
+        expect(meta.tools).toEqual(["read_file", "write_file"]);
+    });
+
     it("normalizes string as-sub-agent", () => {
         const { meta } = buildSkillMeta(
             { "as-sub-agent": "false" },
             { name: "s", category: "prompt" },
         );
         expect(meta.asSubAgent).toBe(false);
+    });
+
+    it("normalizes the agents-directory as_sub_agent form", () => {
+        const { meta } = buildSkillMeta(
+            { as_sub_agent: true },
+            { name: "s", category: "prompt" },
+        );
+        expect(meta.asSubAgent).toBe(true);
     });
 
     it("falls back to the provided name when missing", () => {
@@ -85,5 +106,15 @@ describe("buildSkillMeta", () => {
             { name: "s", category: "skill" },
         );
         expect(errors.some(e => e.includes("unknown frontmatter key"))).toBe(true);
+    });
+
+    it("ignores empty YAML values like a bare required-providers key", () => {
+        const { meta, errors } = buildSkillMeta(
+            { "required-providers": null, "as-sub-agent": "false" },
+            { name: "s", category: "prompt" },
+        );
+        expect(errors).toEqual([]);
+        expect(meta.requiredProviders).toEqual([]);
+        expect(meta.asSubAgent).toBe(false);
     });
 });

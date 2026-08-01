@@ -20,7 +20,7 @@ describe("loadSkillDirectory", () => {
         await fs.mkdir(path.join(skillDir, "hello"), { recursive: true });
         await fs.writeFile(
             path.join(skillDir, "hello", "skill.md"),
-            `---\nname: hello\nrequired-providers:\n  - Workspace\n---\n\nYou are hello.`,
+            `---\nname: hello\ntools:\n  - read_file\n  - write_file\n---\n\nYou are hello.`,
             "utf-8",
         );
         await fs.writeFile(
@@ -33,7 +33,7 @@ describe("loadSkillDirectory", () => {
         expect(result.errors).toEqual([]);
         const skill = result.skills.get("hello");
         expect(skill).toBeDefined();
-        expect(skill!.meta.requiredProviders).toEqual(["Workspace"]);
+        expect(skill!.meta.tools).toEqual(["read_file", "write_file"]);
         expect(skill!.prompt()).toBe("You are hello.");
         expect(skill!.fewShotCount).toBe(1);
     });
@@ -59,6 +59,21 @@ describe("loadSkillDirectory", () => {
         const skill = result.skills.get("flat");
         expect(skill).toBeDefined();
         expect(skill!.prompt({ name: "Codex" })).toBe("Hello Codex");
+    });
+
+    it("loads agents-directory style AGENT.md as prompts", async () => {
+        await fs.mkdir(path.join(tmp, "myagent"), { recursive: true });
+        await fs.writeFile(
+            path.join(tmp, "myagent", "AGENT.md"),
+            "---\nname: myagent\ndescription: a test agent\nas_sub_agent: true\n---\n\nYou are an agent.",
+            "utf-8",
+        );
+
+        const result = await loadSkillDirectory(tmp, "prompt");
+        const skill = result.skills.get("myagent");
+        expect(skill).toBeDefined();
+        expect(skill!.meta.asSubAgent).toBe(true);
+        expect(skill!.prompt()).toContain("You are an agent.");
     });
 
     it("collects validation errors instead of crashing", async () => {
