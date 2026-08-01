@@ -55,10 +55,11 @@ class SkillRegistryStore {
     private loadErrors: string[] = [];
     private config: SkillRegistryConfig = { ...DEFAULT_CONFIG };
 
-    /** Replace the content roots (mainly for tests). Invalidates the cache. */
     public configure(config: Partial<SkillRegistryConfig>): void {
         this.config = { ...DEFAULT_CONFIG, ...config };
         this.skills = null;
+        this.loadPromise = null;
+        this.dynamicSkills = new Map<string, BaseSkill>();
         this.loadErrors = [];
         logger.info("SkillRegistry roots configured");
     }
