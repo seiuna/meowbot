@@ -65,12 +65,24 @@ const listDirectoryTool = defineTool(
             if (!verified.ok) return fail(verified.error);
 
             const dirents = await fs.readdir(verified.path, { withFileTypes: true });
-            const listed = dirents.map(e => ({
-                name: e.name,
-                type: e.isDirectory() ? "dir" : e.isFile() ? "file" : "other",
-                path: path.join(verified.path, e.name),
-            }));
-            const allowed = access.filterEntries(listed);
+            const allowed: Array<{ name: string; type: string; path: string }> = [];
+            for (const e of dirents) {
+                const entryPath = path.join(verified.path, e.name);
+                if (e.isSymbolicLink()) {
+                    // Verify the real target so symlinks/junctions pointing into
+                    // blacklisted locations are not even listed (no name leak).
+                    const target = await access.verify(entryPath);
+                    if (!target.ok) continue;
+                    allowed.push({ name: e.name, type: "link", path: entryPath });
+                } else {
+                    if (!access.check(entryPath).allowed) continue;
+                    allowed.push({
+                        name: e.name,
+                        type: e.isDirectory() ? "dir" : e.isFile() ? "file" : "other",
+                        path: entryPath,
+                    });
+                }
+            }
             allowed.sort((a, b) =>
                 a.type === b.type
                     ? a.name.localeCompare(b.name)
@@ -82,7 +94,7 @@ const listDirectoryTool = defineTool(
             return ok({
                 path: verified.path,
                 entries: allowed,
-                filtered_count: listed.length - allowed.length,
+                filtered_count: dirents.length - allowed.length,
             });
         } catch (error: any) {
             logger.error(`list_directory failed for ${dirPath}: ${error}`);
@@ -199,8 +211,12 @@ const writeFileTool = defineTool(
                 let current: string;
                 try {
                     current = await fs.readFile(target, "utf-8");
-                } catch {
-                    return fail(`File not found: ${filePath} — patch mode requires an existing file.`);
+                } catch (error: any) {
+                    return fail(
+                        error?.code === "ENOENT"
+                            ? `File not found: ${filePath} — patch mode requires an existing file.`
+                            : `Cannot read ${filePath} for patching: ${error?.message ?? error}`,
+                    );
                 }
 
                 for (const edit of edits) {

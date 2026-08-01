@@ -117,6 +117,27 @@ describe("FileSystemToolProvider", () => {
         expect(names).not.toContain("node_modules");
     });
 
+    it("list_directory omits symlinks whose real target is blacklisted", async () => {
+        const victim = await fs.mkdtemp(path.join(os.tmpdir(), "meowbot-fs-victim-"));
+        const link = path.join(root, "evil-link");
+        try {
+            await fs.mkdir(path.join(victim, ".git"), { recursive: true });
+            await fs.symlink(path.join(victim, ".git"), link, process.platform === "win32" ? "junction" : "dir");
+        } catch (error: any) {
+            await fs.rm(victim, { recursive: true, force: true });
+            throw new Error("Failed to create symlink/junction for test: " + error.message);
+        }
+
+        try {
+            const res = JSON.parse(await tools.list_directory.invoke({ path: root }, runConfig()));
+            expect(res.ok).toBe(true);
+            expect(res.entries.some((e: any) => e.name === "evil-link")).toBe(false);
+        } finally {
+            await fs.rm(link, { recursive: true, force: true }).catch(() => {});
+            await fs.rm(victim, { recursive: true, force: true });
+        }
+    });
+
     it("search_files finds matches and skips blacklisted subtrees", async () => {
         const res = JSON.parse(await tools.search_files.invoke({ root, query: "meowbot" }, runConfig()));
         expect(res.ok).toBe(true);
@@ -143,9 +164,9 @@ describe("FileSystemToolProvider", () => {
             await fs.mkdir(path.join(victim, ".git"), { recursive: true });
             await fs.writeFile(path.join(victim, ".git", "secret.txt"), "TOPSECRET\n", "utf-8");
             await fs.symlink(path.join(victim, ".git"), link, process.platform === "win32" ? "junction" : "dir");
-        } catch {
+        } catch (error: any) {
             await fs.rm(victim, { recursive: true, force: true });
-            return; // junction creation not permitted in this environment — skip
+            throw new Error("Failed to create symlink/junction for test: " + error.message);
         }
 
         try {
