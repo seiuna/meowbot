@@ -27,6 +27,7 @@ import { UserProfileToolProvider } from "./social/user_profile_tools.js";
 import { DynamicToolsProvider } from "./tools/dynamic_tools.js";
 import { CommandToolProvider } from "./tools/command/command_tools.js";
 import { SkillToolProvider } from "./tools/skill/skill_tools.js";
+import { SkillRegistry } from "./template/prompts.js";
 import { getVectorRetriever } from "./vector/index.js";
 import { WorkspaceManager, LocalWorkspace, ReadOnlyWorkspace } from "./workspace/index.js";
 import { BootstrapKeyManager } from "./permission/bootstrap_key.js";
@@ -121,6 +122,7 @@ export async function startApp(): Promise<void> {
     await pluginManager.initPlugins({
         commandRegistry,
         messageGateway,
+        registerSkill: (name, sourceDir, category) => SkillRegistry.loadPluginSkill(name, sourceDir, category),
     });
 
     logger.info("Application started successfully");

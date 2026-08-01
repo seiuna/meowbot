@@ -12,8 +12,6 @@ import { IToolProvider } from "@meowbot/tools/tool_registry.js";
 import { SkillRegistry } from "@meowbot/template/prompts.js";
 import { getVectorRetriever } from "@meowbot/vector/index.js";
 import { EmbeddingService } from "@meowbot/vector/embeddings.js";
-import { readFileSync, existsSync } from "node:fs";
-import { resolve } from "node:path";
 import { getLogger } from "@meowbot/utils/logs.js";
 
 const logger = getLogger("SkillTools");
@@ -83,8 +81,6 @@ const searchSkillTool = defineTool(
 
 // ── load_skill ──
 
-const SKILLS_DIR = resolve(import.meta.dirname, "..", "..", "..", "..", "skills");
-
 const loadSkillTool = defineTool(
     {
         name: "load_skill",
@@ -97,7 +93,7 @@ const loadSkillTool = defineTool(
     },
     async ({ skill_name }) => {
         try {
-            // Try to get from SkillRegistry first
+            // Content comes from the SkillRegistry (single source of truth).
             const skill = await SkillRegistry.get(skill_name);
             if (skill) {
                 const content = skill.prompt();
@@ -109,20 +105,6 @@ const loadSkillTool = defineTool(
                     category: skill.meta.category,
                     content,
                 });
-            }
-
-            // Fallback: try reading the file directly
-            const possiblePaths = [
-                resolve(SKILLS_DIR, skill_name, "skill.md"),
-                resolve(SKILLS_DIR, skill_name + ".md"),
-            ];
-            for (const p of possiblePaths) {
-                if (existsSync(p)) {
-                    const raw = readFileSync(p, "utf-8");
-                    // Strip frontmatter
-                    const body = raw.replace(/^---\n[\s\S]*?\n---\n?/, "").trim();
-                    return JSON.stringify({ ok: true, name: skill_name, content: body });
-                }
             }
 
             return JSON.stringify({ ok: false, error: `Skill "${skill_name}" not found. Use search_skill to find available skills.` });
