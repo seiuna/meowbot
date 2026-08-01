@@ -62,8 +62,15 @@ export class Skill extends BaseSkill {
     /**
      * Resolve tools lazily at call time so providers registered after the
      * skill was loaded are still included.
+     *
+     * Binding order:
+     *   1. `tools` frontmatter — exact tool names via ToolRegistry.getToolsByName()
+     *   2. `required-providers` (legacy) — all tools from the named providers
      */
     tools(): DynamicStructuredTool[] {
+        if (this.meta.tools.length > 0) {
+            return toolRegistry.getToolsByName(this.meta.tools);
+        }
         return toolRegistry.getToolsForProviders(this.meta.requiredProviders);
     }
 }

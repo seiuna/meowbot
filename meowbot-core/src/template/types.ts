@@ -13,6 +13,9 @@ export type SkillCategory = (typeof SKILL_CATEGORIES)[number];
 export const SkillMetaSchema = z.object({
     name: z.string().min(1, "name is required"),
     description: z.string().default(""),
+    /** Concrete tool names to bind (preferred over requiredProviders). */
+    tools: z.array(z.string()).default([]),
+    /** Legacy provider-name binding — fallback when `tools` is empty. */
     requiredProviders: z.array(z.string()).default([]),
     /** Whether this skill can be used as a sub-agent (appears in search_prompts results). */
     asSubAgent: z.boolean().default(false),
