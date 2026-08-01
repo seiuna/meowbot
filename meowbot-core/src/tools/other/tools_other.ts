@@ -258,6 +258,9 @@ export function consumePendingDecoration(config: RunnableConfig | undefined): Pe
 
 type AttachmentResolution = { ok: true; id: string } | { ok: false; error: string };
 
+/** Max size for files attached via decorate_reply (matches the read_file cap). */
+const MAX_ATTACHMENT_SIZE = 10 * 1024 * 1024;
+
 /**
  * Resolve a decoration attachment reference to a FileService fileId.
  *
@@ -293,6 +296,12 @@ async function resolveAttachment(
     try {
         const info = await stat(filePath);
         if (!info.isFile()) return { ok: false, error: `Not a regular file: ${filePath}` };
+        if (info.size > MAX_ATTACHMENT_SIZE) {
+            return {
+                ok: false,
+                error: `File too large (${info.size} bytes, max ${MAX_ATTACHMENT_SIZE})`,
+            };
+        }
     } catch {
         return { ok: false, error: `File not found: ${filePath}` };
     }
