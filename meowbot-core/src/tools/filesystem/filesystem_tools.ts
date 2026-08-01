@@ -182,6 +182,14 @@ const writeFileTool = defineTool(
     },
     async ({ path: filePath, content, append, edits }) => {
         try {
+            const hasContent = content !== undefined;
+            const hasEdits = edits !== undefined;
+            if (hasContent === hasEdits) {
+                return fail("Invalid input: pass exactly one of 'content' or 'edits'.");
+            }
+            if (append && !hasContent) {
+                return fail("Invalid input: 'append' can only be used with 'content'.");
+            }
             const verified = await getFsAccessControl().verify(filePath);
             if (!verified.ok) return fail(verified.error);
             const target = verified.path;
@@ -286,22 +294,26 @@ const searchFilesTool = defineTool(
                     if (results.length >= maxResults) return;
                     const full = path.join(dir, entry.name);
                     if (!access.check(full).allowed) continue;
+                    // Re-verify against the real path so junctions/symlinks
+                    // pointing outside the allowed policy cannot be traversed.
+                    const verified = await access.verify(full);
+                    if (!verified.ok) continue;
                     if (entry.isDirectory()) {
-                        await walk(full);
+                        await walk(verified.path);
                     } else if (entry.isFile()) {
                         const ext = entry.name.slice(entry.name.lastIndexOf(".")).toLowerCase();
                         if (SKIP_EXTS.has(ext)) continue;
-                        if (globRegex && !globRegex.test(full.replace(/\\/g, "/"))) continue;
+                        if (globRegex && !globRegex.test(verified.path.replace(/\\/g, "/"))) continue;
                         try {
-                            const stat = await fs.stat(full);
+                            const stat = await fs.stat(verified.path);
                             if (stat.size > MAX_READ_SIZE) continue;
-                            const content = await fs.readFile(full, "utf-8");
+                            const content = await fs.readFile(verified.path, "utf-8");
                             if (content.includes("\u0000")) continue;
                             const lines = content.split("\n");
                             for (let i = 0; i < lines.length && results.length < maxResults; i++) {
                                 if (lines[i].toLowerCase().includes(qLower)) {
                                     results.push({
-                                        file: full,
+                                        file: verified.path,
                                         line: i + 1,
                                         content: lines[i].trim().substring(0, 200),
                                     });

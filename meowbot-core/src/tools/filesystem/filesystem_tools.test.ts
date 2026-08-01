@@ -59,6 +59,35 @@ describe("FileSystemToolProvider", () => {
         expect(await fs.readFile(target, "utf-8")).toBe("FOO\nbar\n");
     });
 
+    it("write_file rejects missing or conflicting inputs", async () => {
+        const target = path.join(root, "guard.txt");
+
+        const none = JSON.parse(await tools.write_file.invoke({ path: target }, runConfig()));
+        expect(none.ok).toBe(false);
+        expect(none.error).toContain("exactly one");
+
+        const both = JSON.parse(
+            await tools.write_file.invoke(
+                { path: target, content: "x", edits: [{ search: "a", replace: "b" }] },
+                runConfig(),
+            ),
+        );
+        expect(both.ok).toBe(false);
+        expect(both.error).toContain("exactly one");
+
+        const appendEdits = JSON.parse(
+            await tools.write_file.invoke(
+                { path: target, edits: [{ search: "a", replace: "b" }], append: true },
+                runConfig(),
+            ),
+        );
+        expect(appendEdits.ok).toBe(false);
+        expect(appendEdits.error).toContain("'append'");
+
+        const exists = await fs.stat(target).then(() => true).catch(() => false);
+        expect(exists).toBe(false); // nothing was created
+    });
+
     it("read_file returns content with line counts", async () => {
         const res = JSON.parse(await tools.read_file.invoke({ path: path.join(root, "src", "app.ts") }, runConfig()));
         expect(res.ok).toBe(true);
@@ -84,6 +113,28 @@ describe("FileSystemToolProvider", () => {
         expect(files.some(f => f.includes("app.ts"))).toBe(true);
         expect(files.some(f => f.includes(".git"))).toBe(false);
         expect(files.some(f => f.includes("node_modules"))).toBe(false);
+    });
+
+    it("search_files does not traverse junctions into blacklisted targets", async () => {
+        const victim = await fs.mkdtemp(path.join(os.tmpdir(), "meowbot-fs-victim-"));
+        const link = path.join(root, "link");
+        try {
+            await fs.mkdir(path.join(victim, ".git"), { recursive: true });
+            await fs.writeFile(path.join(victim, ".git", "secret.txt"), "TOPSECRET\n", "utf-8");
+            await fs.symlink(path.join(victim, ".git"), link, process.platform === "win32" ? "junction" : "dir");
+        } catch {
+            await fs.rm(victim, { recursive: true, force: true });
+            return; // junction creation not permitted in this environment — skip
+        }
+
+        try {
+            const res = JSON.parse(await tools.search_files.invoke({ root, query: "TOPSECRET" }, runConfig()));
+            expect(res.ok).toBe(true);
+            expect(res.results.some((r: any) => r.file.includes("secret.txt"))).toBe(false);
+        } finally {
+            await fs.rm(link, { recursive: true, force: true }).catch(() => {});
+            await fs.rm(victim, { recursive: true, force: true });
+        }
     });
 
     it("read_file denies blacklisted paths", async () => {
