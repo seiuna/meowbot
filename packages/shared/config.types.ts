@@ -158,3 +158,22 @@ export const UserProfileDefaultsSchema = z.object({
     defaultWarmth: z.number().min(0).max(100),
 });
 export type UserProfileDefaults = z.infer<typeof UserProfileDefaultsSchema>;
+
+/**
+ * Filesystem access control config.
+ *
+ * - `whitelist`: allow patterns (glob). Empty = everything is allowed except
+ *   the blacklist (default). Non-empty = default-deny: only paths matching the
+ *   whitelist are allowed.
+ * - `blacklist`: deny patterns (glob). Always evaluated first and always wins,
+ *   merged with the built-in default blacklist (`.git`, `node_modules`, system
+ *   dirs, home secrets, the bot's own `meowbot-core/config/`, ...).
+ *
+ * Patterns are matched against normalized absolute paths (forward slashes,
+ * lowercase drive letters on Windows, `..` collapsed).
+ */
+export const FsConfigSchema = z.object({
+    whitelist: z.array(z.string()).default([]),
+    blacklist: z.array(z.string()).default([]),
+});
+export type FsConfig = z.infer<typeof FsConfigSchema>;
