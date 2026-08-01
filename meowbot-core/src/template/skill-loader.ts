@@ -109,8 +109,8 @@ export async function loadSingleSkill(
         }
     }
 
-    // Templates are pure rendering entries — no few-shot support.
-    const fewShot = category === "template" ? [] : await loadFewShot(dirPath);
+    // Only prompts support few-shot; skills and templates do not.
+    const fewShot = category === "prompt" ? await loadFewShot(dirPath) : [];
     const skill = makeSkillInstance(meta, doc.body, fewShot);
     logger.debug(
         `Loaded ${category} "${meta.name}" from ${folderName}` +

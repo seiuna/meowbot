@@ -15,7 +15,7 @@ describe("loadSkillDirectory", () => {
         await fs.rm(tmp, { recursive: true, force: true });
     });
 
-    it("loads folder-per-skill with frontmatter + few-shot", async () => {
+    it("loads folder-per-skill with frontmatter", async () => {
         const skillDir = path.join(tmp, "skills");
         await fs.mkdir(path.join(skillDir, "hello"), { recursive: true });
         await fs.writeFile(
@@ -35,7 +35,21 @@ describe("loadSkillDirectory", () => {
         expect(skill).toBeDefined();
         expect(skill!.meta.tools).toEqual(["read_file", "write_file"]);
         expect(skill!.prompt()).toBe("You are hello.");
-        expect(skill!.fewShotCount).toBe(1);
+        expect(skill!.fewShotCount).toBe(0); // skills do not load few-shot
+    });
+
+    it("loads few-shot only for prompts", async () => {
+        const promptDir = path.join(tmp, "prompts");
+        await fs.mkdir(path.join(promptDir, "agent"), { recursive: true });
+        await fs.writeFile(path.join(promptDir, "agent", "skill.md"), "---\nname: agent\n---\n\nYou are an agent.", "utf-8");
+        await fs.writeFile(
+            path.join(promptDir, "agent", "few-shot.json"),
+            JSON.stringify([{ human: "hi", ai: "hello!" }]),
+            "utf-8",
+        );
+
+        const result = await loadSkillDirectory(promptDir, "prompt");
+        expect(result.skills.get("agent")!.fewShotCount).toBe(1);
     });
 
     it("does not load few-shot for templates", async () => {
