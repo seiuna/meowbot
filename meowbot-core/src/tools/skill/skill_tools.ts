@@ -32,13 +32,13 @@ const searchSkillTool = defineTool(
     },
     async ({ query }) => {
         const skills = await SkillRegistry.listSkills();
-        const results: Array<{ name: string; description: string; providers: string[]; score?: number }> = [];
+        const results: Array<{ name: string; description: string; providers: string[]; tools: string[]; score?: number }> = [];
 
         // Try vector search first if enabled
         if (embedSvc.isEnabled) {
             try {
                 const retriever = getVectorRetriever();
-                const hits = await retriever.searchDocuments(query, 20);
+                const hits = await retriever.searchSkills(query, 20);
                 // Filter hits that match skill names
                 for (const hit of hits) {
                     const meta = await SkillRegistry.getMeta(hit.docId.replace("skill:", ""));
@@ -47,6 +47,7 @@ const searchSkillTool = defineTool(
                             name: meta.name,
                             description: meta.description,
                             providers: meta.requiredProviders,
+                            tools: meta.tools,
                             score: Math.round(hit.score * 100) / 100,
                         });
                     }
@@ -72,6 +73,7 @@ const searchSkillTool = defineTool(
                 name: meta.name,
                 description: meta.description,
                 providers: meta.requiredProviders,
+                tools: meta.tools,
             });
         }
 

@@ -28,6 +28,7 @@ import { DynamicToolsProvider } from "./tools/dynamic_tools.js";
 import { CommandToolProvider } from "./tools/command/command_tools.js";
 import { SkillToolProvider } from "./tools/skill/skill_tools.js";
 import { SkillRegistry } from "./template/prompts.js";
+import { EmbeddingService } from "./vector/index.js";
 import { getVectorRetriever } from "./vector/index.js";
 import { WorkspaceManager, LocalWorkspace, ReadOnlyWorkspace } from "./workspace/index.js";
 import { BootstrapKeyManager } from "./permission/bootstrap_key.js";
@@ -124,6 +125,15 @@ export async function startApp(): Promise<void> {
         messageGateway,
         registerSkill: (name, sourceDir, category) => SkillRegistry.loadPluginSkill(name, sourceDir, category),
     });
+
+    // Re-index skills so plugin-registered skills are included in vector search.
+    try {
+        if (EmbeddingService.getInstance().isEnabled) {
+            await getVectorRetriever().refreshSkillIndex();
+        }
+    } catch (e) {
+        logger.warn("Skill index refresh failed (non-fatal):", e);
+    }
 
     logger.info("Application started successfully");
 }

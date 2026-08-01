@@ -216,6 +216,7 @@ class SkillRegistryStore {
         name: string;
         description: string;
         requiredProviders: string[];
+        tools: string[];
         asSubAgent: boolean;
         category: SkillCategory;
         version?: string;
@@ -229,6 +230,7 @@ class SkillRegistryStore {
             name: skill.meta.name,
             description: skill.meta.description,
             requiredProviders: skill.meta.requiredProviders,
+            tools: skill.meta.tools,
             asSubAgent: skill.meta.asSubAgent,
             category: skill.meta.category,
             version: skill.meta.version,

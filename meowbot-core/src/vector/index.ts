@@ -10,4 +10,5 @@
 export { EmbeddingService, type EmbeddingVector } from "./embeddings.js";
 export { VectorStore, type DocEntry } from "./store.js";
 export { ToolIndexer } from "./tool_indexer.js";
+export { SkillIndexer } from "./skill_indexer.js";
 export { VectorRetriever, getVectorRetriever, type SearchHit } from "./retriever.js";
