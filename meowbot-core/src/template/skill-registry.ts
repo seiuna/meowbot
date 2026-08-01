@@ -1,95 +1,150 @@
 /**
  * SkillRegistry — unified skill store.
  *
- * Loads from three directories under project root:
- *   prompts/   — agent/sub-agent system prompts (with asSubAgent toggle)
- *   skills/    — tool-providing skills (dynamic tool loading)
- *   templates/ — message/env templates (${variable} interpolation)
+ * Loads from three directories under project root (all configurable):
+ *   prompts/    — agent/sub-agent system prompts (with asSubAgent toggle)
+ *   skills/     — tool-providing skills (dynamic tool loading)
+ *   templates/  — message/env templates (${variable} interpolation)
  *
- * Also loads from each plugin's skills/ subdirectory (categorized as "skill").
+ * Plugin skills are registered at runtime via `registerDynamic()` (wired to the
+ * PluginContext.registerSkill hook) instead of scanning a hardcoded plugins dir.
  *
  * API:
- *   SkillRegistry.get(name)             → Skill | undefined
- *   SkillRegistry.list()                → string[] (all names)
- *   SkillRegistry.listPrompts()         → string[] (prompt names only)
- *   SkillRegistry.listSkills()          → string[] (skill names only)
- *   SkillRegistry.listTemplates()       → string[] (template names only)
- *   SkillRegistry.build(name, data)     → Promise<string>
- *   SkillRegistry.getMeta(name)         → { name, description, requiredProviders, asSubAgent, category }
+ *   SkillRegistry.get(name)              → BaseSkill | undefined
+ *   SkillRegistry.list()                 → string[] (all names)
+ *   SkillRegistry.listPrompts()          → string[] (prompt names only)
+ *   SkillRegistry.listSkills()           → string[] (skill names only)
+ *   SkillRegistry.listTemplates()        → string[] (template names only)
+ *   SkillRegistry.build(name, data)      → Promise<string>
+ *   SkillRegistry.getMeta(name)          → { ...meta, content }
+ *   SkillRegistry.reload()               → re-scan directories
+ *   SkillRegistry.configure(...)         → inject custom roots (tests)
+ *   SkillRegistry.getLoadErrors()        → problems collected during loading
  */
 
 import { resolve } from "node:path";
-import { readdir, stat } from "node:fs/promises";
-import { join } from "node:path";
 import { toolRegistry } from "../tools/tool_registry.js";
-import { Skill } from "./skill.js";
-import { loadSkills } from "./skill-loader.js";
+import { BaseSkill } from "./skill.js";
+import { loadSkillDirectory, loadSingleSkill } from "./skill-loader.js";
+import type { SkillCategory } from "./types.js";
 import { getLogger } from "../utils/logs.js";
 import type { BaseMessage } from "@langchain/core/messages";
 
 const logger = getLogger("SkillRegistry");
 
 const ROOT = resolve(import.meta.dirname, "..", "..", "..");
-const SKILLS_DIR = resolve(ROOT, "skills");
-const TEMPLATES_DIR = resolve(ROOT, "templates");
-const PLUGINS_DIR = resolve(import.meta.dirname, "..", "plugin", "plugins");
+
+export interface SkillRegistryConfig {
+    skillsDir: string;
+    templatesDir: string;
+    promptsDir: string;
+}
+
+const DEFAULT_CONFIG: SkillRegistryConfig = {
+    skillsDir: resolve(ROOT, "skills"),
+    templatesDir: resolve(ROOT, "templates"),
+    // The "prompt" category reads the project-root agents/ directory
+    // (folder-per-agent with AGENT.md), which is where sub-agent prompts live.
+    promptsDir: resolve(ROOT, "agents"),
+};
 
 class SkillRegistryStore {
-    private skills: Map<string, Skill> | null = null;
+    private skills: Map<string, BaseSkill> | null = null;
+    /** Runtime-registered skills (plugin hooks). Survive reload(). */
+    private dynamicSkills = new Map<string, BaseSkill>();
+    private loadErrors: string[] = [];
+    private config: SkillRegistryConfig = { ...DEFAULT_CONFIG };
 
-    private async ensureLoaded(): Promise<Map<string, Skill>> {
-        if (!this.skills) {
-            const providers = toolRegistry.getProviders().map(p => p.getName());
-            this.skills = new Map();
-
-            // 1. Load skills/ (tool-providing)
-            const skillDefs = await loadSkills(SKILLS_DIR, providers, "skill");
-            for (const [k, v] of skillDefs) this.skills.set(k, v);
-
-            // 2. Load templates/
-            const templates = await loadSkills(TEMPLATES_DIR, providers, "template");
-            for (const [k, v] of templates) this.skills.set(k, v);
-
-            // 3. Load plugin skills/ (categorized as "skill")
-            await this.loadPluginSkills(providers);
-        }
-        return this.skills;
+    public configure(config: Partial<SkillRegistryConfig>): void {
+        this.config = { ...DEFAULT_CONFIG, ...config };
+        this.skills = null;
+        this.loadPromise = null;
+        this.dynamicSkills = new Map<string, BaseSkill>();
+        this.loadErrors = [];
+        logger.info("SkillRegistry roots configured");
     }
 
-    /** Discover and load skill folders from each plugin's skills/ subdirectory. */
-    private async loadPluginSkills(providers: string[]): Promise<void> {
-        let pluginDirs: string[];
-        try {
-            pluginDirs = await readdir(PLUGINS_DIR);
-        } catch {
-            return; // No plugins directory
-        }
-
-        let loadedCount = 0;
-        for (const pluginName of pluginDirs) {
-            const pluginSkillsDir = join(PLUGINS_DIR, pluginName, "skills");
-            let pluginStat;
-            try {
-                pluginStat = await stat(pluginSkillsDir);
-            } catch {
-                continue;
+    /**
+     * Register a skill at runtime (used by the PluginContext.registerSkill hook).
+     * Dynamic skills never override scanned ones; conflicts are logged.
+     */
+    public async registerDynamic(skill: BaseSkill): Promise<void> {
+        this.dynamicSkills.set(skill.meta.name, skill);
+        if (this.skills) {
+            if (this.skills.has(skill.meta.name)) {
+                logger.warn(`Dynamic skill "${skill.meta.name}" conflicts with a scanned skill; keeping the scanned one.`);
+                return;
             }
-            if (!pluginStat.isDirectory()) continue;
+            this.skills.set(skill.meta.name, skill);
+        }
+    }
 
-            const pluginSkills = await loadSkills(pluginSkillsDir, providers, "skill");
-            for (const [k, v] of pluginSkills) {
-                this.skills!.set(k, v);
-                loadedCount++;
-            }
+    /** Load a plugin skill folder and register it dynamically. */
+    public async loadPluginSkill(name: string, sourceDir: string, category: SkillCategory = "skill"): Promise<void> {
+        const loaded = await loadSingleSkill(sourceDir, category);
+        if (!loaded) throw new Error(`No skill.md found in ${sourceDir} (skill "${name}")`);
+        if (loaded.skill.meta.name !== name) {
+            logger.warn(
+                `Plugin skill registered as "${loaded.skill.meta.name}" but requested name was "${name}" — ` +
+                `the frontmatter/folder name wins.`,
+            );
+        }
+        for (const err of loaded.errors) {
+            logger.warn(`Plugin skill "${name}" load problem: ${err}`);
+        }
+        await this.registerDynamic(loaded.skill);
+    }
+
+    /** In-flight load promise, so concurrent callers share one load. */
+    private loadPromise: Promise<Map<string, BaseSkill>> | null = null;
+
+    private ensureLoaded(): Promise<Map<string, BaseSkill>> {
+        if (this.skills) return Promise.resolve(this.skills);
+        if (!this.loadPromise) {
+            this.loadPromise = this.doLoad()
+                .then(map => {
+                    this.skills = map;
+                    return map;
+                })
+                .finally(() => {
+                    this.loadPromise = null;
+                });
+        }
+        return this.loadPromise;
+    }
+
+    private async doLoad(): Promise<Map<string, BaseSkill>> {
+        const map = new Map<string, BaseSkill>();
+        this.loadErrors = [];
+        const providers = toolRegistry.getProviders().map(p => p.getName());
+
+        const dirs: Array<[string, SkillCategory]> = [
+            [this.config.skillsDir, "skill"],
+            [this.config.templatesDir, "template"],
+            [this.config.promptsDir, "prompt"],
+        ];
+        for (const [dir, category] of dirs) {
+            const result = await loadSkillDirectory(dir, category, providers);
+            for (const [k, v] of result.skills) this.addLoadedTo(map, k, v, "directory");
+            this.loadErrors.push(...result.errors);
         }
 
-        if (loadedCount > 0) {
-            logger.info(`Loaded ${loadedCount} plugin skill(s)`);
+        // Runtime-registered (plugin) skills — lowest priority.
+        for (const [k, v] of this.dynamicSkills) this.addLoadedTo(map, k, v, "plugin");
+        return map;
+    }
+
+    private addLoadedTo(map: Map<string, BaseSkill>, name: string, skill: BaseSkill, source: string): void {
+        if (map.has(name)) {
+            logger.warn(`Duplicate skill "${name}" (${source}: ${skill.meta.sourceDir}) ignored`);
+            this.loadErrors.push(`Duplicate skill "${name}" (${source})`);
+            return;
         }
+        map.set(name, skill);
     }
 
     /** Filter loaded skills by category. */
-    private async listByCategory(category: "prompt" | "skill" | "template"): Promise<string[]> {
+    private async listByCategory(category: SkillCategory): Promise<string[]> {
         const s = await this.ensureLoaded();
         return Array.from(s.values())
             .filter(skill => skill.meta.category === category)
@@ -98,8 +153,8 @@ class SkillRegistryStore {
 
     // ── Skill access ──
 
-    /** Get a Skill by name. */
-    async get(name: string): Promise<Skill | undefined> {
+    /** Get a skill by name (any category). */
+    async get(name: string): Promise<BaseSkill | undefined> {
         const s = await this.ensureLoaded();
         return s.get(name);
     }
@@ -133,11 +188,7 @@ class SkillRegistryStore {
 
     // ── Prompt building (backward-compatible) ──
 
-    /**
-     * Build a rendered prompt by skill name with optional data.
-     * Same API as the old Prompts.build().
-     * Works across all categories (prompts, skills, templates).
-     */
+    /** Render a skill by name with optional data. Works across all categories. */
     async build(name: string, data: Record<string, any>): Promise<string> {
         const skill = await this.get(name);
         if (!skill) {
@@ -154,10 +205,7 @@ class SkillRegistryStore {
 
     // ── Few-shot ──
 
-    /**
-     * Get few-shot examples as LangChain BaseMessage[] for a skill.
-     * Returns empty array if the skill has no few-shot.json.
-     */
+    /** Get few-shot examples as LangChain BaseMessage[] for a skill. */
     async fewshot(name: string): Promise<BaseMessage[]> {
         const skill = await this.get(name);
         if (!skill) return [];
@@ -166,13 +214,17 @@ class SkillRegistryStore {
 
     // ── Metadata (backward compat) ──
 
-    /** Get skill metadata with content. */
+    /** Get skill metadata with rendered content. */
     async getMeta(name: string): Promise<{
         name: string;
         description: string;
         requiredProviders: string[];
+        tools: string[];
         asSubAgent: boolean;
-        category: "prompt" | "skill" | "template";
+        category: SkillCategory;
+        version?: string;
+        tags: string[];
+        sourceDir?: string;
         content: string;
     } | null> {
         const skill = await this.get(name);
@@ -181,18 +233,29 @@ class SkillRegistryStore {
             name: skill.meta.name,
             description: skill.meta.description,
             requiredProviders: skill.meta.requiredProviders,
+            tools: skill.meta.tools,
             asSubAgent: skill.meta.asSubAgent,
             category: skill.meta.category,
+            version: skill.meta.version,
+            tags: skill.meta.tags,
+            sourceDir: skill.meta.sourceDir,
             content: skill.prompt(),
         };
     }
 
     // ── Lifecycle ──
 
-    /** Reload all skills (e.g. after file changes). */
+    /** Reload all skills (e.g. after file changes). Dynamic skills survive. */
     async reload(): Promise<void> {
+        // Wait for any in-flight load before dropping the cache.
+        if (this.loadPromise) await this.loadPromise.catch(() => {});
         this.skills = null;
         await this.ensureLoaded();
+    }
+
+    /** Problems collected during the last load (validation / duplicates). */
+    getLoadErrors(): string[] {
+        return [...this.loadErrors];
     }
 }
 

@@ -8,7 +8,7 @@ import { SessionContext, SessionType } from "@meowbot/gateway/index.types";
 import { modelRegistry } from "@meowbot/llm";
 import { getLogger } from "@meowbot/utils/logs";
 import { checkpointer } from "../checkpointer";
-import { Prompts, SkillRegistry } from "@meowbot/template/prompts";
+import { Prompts, SkillRegistry, Skill } from "@meowbot/template/prompts";
 import { compactThread } from "../thread_manager.js";
 import { messageValidatorNode } from "../message_validator.js";
 import { DynamicStructuredTool, DynamicTool } from "@langchain/core/tools";
@@ -43,7 +43,7 @@ export class DefaultAgent extends BaseAgent {
     /** Content filter cache: content hash → blocked boolean. TTL-based. */
     private filterCache: Map<string, { blocked: boolean; at: number }> = new Map();
     /** Cached agent-system skill (resolved once, reloaded on SkillRegistry.reload). */
-    private skillCache: { tools: DynamicStructuredTool[]; prompt: string; fewshot: () => BaseMessage[] } | null = null;
+    private skillCache: { skill: Skill; prompt: string; fewshot: () => BaseMessage[] } | null = null;
 
     constructor() {
         // No hardcoded tool providers — tools come from the agent-system skill.
@@ -51,8 +51,8 @@ export class DefaultAgent extends BaseAgent {
         this.app = this.buildGraph();
     }
 
-    /** Lazily resolve the agent-system skill and cache tools + prompt. */
-    private async resolveSkill(): Promise<{ tools: DynamicStructuredTool[]; prompt: string; fewshot: () => BaseMessage[] }> {
+    /** Resolve the agent-system skill and cache the skill + prompt. */
+    private async resolveSkill(): Promise<{ skill: Skill; prompt: string; fewshot: () => BaseMessage[] }> {
         if (!this.skillCache) {
             const skill = await SkillRegistry.get("agent-system");
             if (!skill) {
@@ -61,8 +61,11 @@ export class DefaultAgent extends BaseAgent {
                     `Ensure skills/agent-system/ exists with skill.md and info.json.`
                 );
             }
+            if (!(skill instanceof Skill)) {
+                throw new Error(`The "agent-system" skill must be a tool-providing Skill, got category "${skill.meta.category}".`);
+            }
             this.skillCache = {
-                tools: skill.tools(),
+                skill,
                 prompt: skill.prompt(),
                 fewshot: () => skill.fewshot(),
             };
@@ -189,7 +192,7 @@ export class DefaultAgent extends BaseAgent {
         config: RunnableConfig
     ): Promise<Partial<typeof AgentState.State>> {
         const skill = await this.resolveSkill();
-        const model = modelRegistry.getModel("executor").bindTools(skill.tools);
+        const model = modelRegistry.getModel("executor").bindTools(skill.skill.tools());
 
         const messages = [
             new SystemMessage(skill.prompt),
@@ -212,7 +215,8 @@ export class DefaultAgent extends BaseAgent {
         config: RunnableConfig
     ): Promise<Partial<typeof AgentState.State>> {
         const skill = await this.resolveSkill();
-        const toolNode = new ToolNode(skill.tools);
+        // Resolve tools at call time so providers registered after startup are included.
+        const toolNode = new ToolNode(skill.skill.tools());
         const result = await toolNode.invoke(state, config);
         return result;
     }

@@ -10,6 +10,7 @@
 import { VectorStore } from "./store.js";
 import { EmbeddingService } from "./embeddings.js";
 import { ToolIndexer } from "./tool_indexer.js";
+import { SkillIndexer } from "./skill_indexer.js";
 import { getLogger } from "../utils/logs.js";
 
 const logger = getLogger("VectorRetriever");
@@ -25,10 +26,12 @@ export interface SearchHit {
 export class VectorRetriever {
     private store: VectorStore;
     private toolIndexer: ToolIndexer;
+    private skillIndexer: SkillIndexer;
 
     constructor() {
         this.store = VectorStore.getInstance();
         this.toolIndexer = new ToolIndexer();
+        this.skillIndexer = new SkillIndexer();
     }
 
     /** Index all tools at startup. No-op if embedding is disabled. */
@@ -57,6 +60,20 @@ export class VectorRetriever {
     async searchDocuments(query: string, topK: number = 5): Promise<SearchHit[]> {
         const results = await this.store.search(query, "documents", topK);
         return results;
+    }
+
+    /**
+     * Search indexed skills by query (namespace "skills", docIds `skill:<name>`).
+     */
+    async searchSkills(query: string, topK: number = 5): Promise<SearchHit[]> {
+        return this.store.search(query, "skills", topK);
+    }
+
+    /**
+     * Re-index skills - call after SkillRegistry.reload() or plugin registration.
+     */
+    async refreshSkillIndex(): Promise<number> {
+        return this.skillIndexer.indexAllSkills();
     }
 
     /**

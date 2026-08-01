@@ -10,14 +10,10 @@ import { DynamicStructuredTool } from "@langchain/core/tools";
 import { defineEnvToolWithThought as defineTool } from "@meowbot/tools/tools.js";
 import { IToolProvider } from "@meowbot/tools/tool_registry.js";
 import { SkillRegistry } from "@meowbot/template/prompts.js";
-import { getVectorRetriever } from "@meowbot/vector/index.js";
-import { EmbeddingService } from "@meowbot/vector/embeddings.js";
-import { readFileSync, existsSync } from "node:fs";
-import { resolve } from "node:path";
 import { getLogger } from "@meowbot/utils/logs.js";
+import { searchSkills } from "./skill_search.js";
 
 const logger = getLogger("SkillTools");
-const embedSvc = EmbeddingService.getInstance();
 
 // ── search_skill ──
 
@@ -33,57 +29,18 @@ const searchSkillTool = defineTool(
         }),
     },
     async ({ query }) => {
-        const skills = await SkillRegistry.listSkills();
-        const results: Array<{ name: string; description: string; providers: string[]; score?: number }> = [];
-
-        // Try vector search first if enabled
-        if (embedSvc.isEnabled) {
-            try {
-                const retriever = getVectorRetriever();
-                const hits = await retriever.searchDocuments(query, 20);
-                // Filter hits that match skill names
-                for (const hit of hits) {
-                    const meta = await SkillRegistry.getMeta(hit.docId.replace("skill:", ""));
-                    if (meta && meta.category === "skill") {
-                        results.push({
-                            name: meta.name,
-                            description: meta.description,
-                            providers: meta.requiredProviders,
-                            score: Math.round(hit.score * 100) / 100,
-                        });
-                    }
-                    if (results.length >= 10) break;
-                }
-                if (results.length > 0) {
-                    return JSON.stringify({ ok: true, query, count: results.length, mode: "vector", skills: results });
-                }
-            } catch (e) {
-                logger.debug(`Skill vector search failed: ${e}`);
-            }
-        }
-
-        // Text match fallback
-        const q = query.toLowerCase();
-        for (const name of skills) {
-            const meta = await SkillRegistry.getMeta(name);
-            if (!meta) continue;
-            const matchName = name.toLowerCase().includes(q);
-            const matchDesc = (meta.description || "").toLowerCase().includes(q);
-            if (!matchName && !matchDesc) continue;
-            results.push({
-                name: meta.name,
-                description: meta.description,
-                providers: meta.requiredProviders,
-            });
-        }
-
-        return JSON.stringify({ ok: true, query, count: results.length, mode: "text", skills: results });
+        const result = await searchSkills(query);
+        return JSON.stringify({
+            ok: true,
+            query: result.query,
+            count: result.results.length,
+            mode: result.mode,
+            skills: result.results,
+        });
     },
 );
 
 // ── load_skill ──
-
-const SKILLS_DIR = resolve(import.meta.dirname, "..", "..", "..", "..", "skills");
 
 const loadSkillTool = defineTool(
     {
@@ -97,7 +54,7 @@ const loadSkillTool = defineTool(
     },
     async ({ skill_name }) => {
         try {
-            // Try to get from SkillRegistry first
+            // Content comes from the SkillRegistry (single source of truth).
             const skill = await SkillRegistry.get(skill_name);
             if (skill) {
                 const content = skill.prompt();
@@ -109,20 +66,6 @@ const loadSkillTool = defineTool(
                     category: skill.meta.category,
                     content,
                 });
-            }
-
-            // Fallback: try reading the file directly
-            const possiblePaths = [
-                resolve(SKILLS_DIR, skill_name, "skill.md"),
-                resolve(SKILLS_DIR, skill_name + ".md"),
-            ];
-            for (const p of possiblePaths) {
-                if (existsSync(p)) {
-                    const raw = readFileSync(p, "utf-8");
-                    // Strip frontmatter
-                    const body = raw.replace(/^---\n[\s\S]*?\n---\n?/, "").trim();
-                    return JSON.stringify({ ok: true, name: skill_name, content: body });
-                }
             }
 
             return JSON.stringify({ ok: false, error: `Skill "${skill_name}" not found. Use search_skill to find available skills.` });

@@ -6,5 +6,5 @@
  */
 
 export { Prompts, SkillRegistry } from "./skill-registry.js";
-export { Skill } from "./skill.js";
-export type { SkillMeta, FewShotPair } from "./skill.js";
+export { BaseSkill, Skill, Template } from "./skill.js";
+export type { SkillMeta, FewShotPair, SkillCategory } from "./types.js";

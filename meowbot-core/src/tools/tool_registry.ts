@@ -133,6 +133,24 @@ export class ToolRegistry implements IToolRegistry {
   }
 
   /**
+   * 获取指定工具名的启用工具（skill 级绑定）。
+   * 未注册的工具名会告警并跳过。
+   */
+  getToolsByName(names: string[]): DynamicStructuredTool[] {
+    const byName = new Map(this.getAllTools().map(t => [t.name, t]));
+    const found: DynamicStructuredTool[] = [];
+    for (const name of names) {
+      const tool = byName.get(name);
+      if (!tool) {
+        logger.warn(`Tool "${name}" not found in any provider, skipping`);
+        continue;
+      }
+      if (this.isToolEnabled(tool)) found.push(tool);
+    }
+    return found;
+  }
+
+  /**
    * 获取工具提供者列表
    */
   getProviders(): IToolProvider[] {

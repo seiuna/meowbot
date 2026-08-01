@@ -1,5 +1,6 @@
 import { CommandRegistry } from "@meowbot/command";
 import { MessageGateway } from "@meowbot/gateway";
+import type { SkillCategory } from "@meowbot/template/types.js";
 import { getLogger } from "@meowbot/utils/logs";
 import { readdir, stat } from "node:fs/promises";
 import { join, resolve } from "node:path";
@@ -10,6 +11,11 @@ const logger = getLogger("PluginManager");
 export interface PluginContext {
     commandRegistry: CommandRegistry;
     messageGateway: MessageGateway;
+    /**
+     * Register a skill folder (containing skill.md) with the SkillRegistry.
+     * The folder is loaded lazily; conflicts with scanned skills are ignored.
+     */
+    registerSkill: (name: string, sourceDir: string, category?: SkillCategory) => Promise<void>;
 }
 
 export abstract class Plugin {
