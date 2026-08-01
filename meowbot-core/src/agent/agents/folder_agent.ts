@@ -93,10 +93,12 @@ export class FolderAgent extends BaseAgent {
 
     private buildGraph() {
         return new StateGraph(AgentState)
+            .addNode("messageBuilder", this.messageBuilderNode.bind(this))
             .addNode("messageValidator", messageValidatorNode.bind(this))
             .addNode("executor", this.executorNode.bind(this))
             .addNode("tools", this.toolsNode.bind(this))
-            .addEdge("__start__", "messageValidator")
+            .addEdge("__start__", "messageBuilder")
+            .addEdge("messageBuilder", "messageValidator")
             .addEdge("messageValidator", "executor")
             .addConditionalEdges("executor", this.routeAfterExecutor.bind(this), {
                 tools: "tools",
@@ -104,6 +106,25 @@ export class FolderAgent extends BaseAgent {
             })
             .addEdge("tools", "executor")
             .compile({ checkpointer: checkpointer.mongoCheckpointer });
+    }
+
+    /**
+     * Message builder node — converts the raw session event into the templated
+     * HumanMessage inside the graph (previously pre-built in handleSession).
+     * Reads the session from state (fallback: run config) and appends the
+     * message, so multi-turn history from the checkpointer is preserved.
+     */
+    private async messageBuilderNode(
+        state: typeof AgentState.State,
+        config: RunnableConfig,
+    ): Promise<Partial<typeof AgentState.State>> {
+        const session = state.session ?? (config as any)?.configurable?.session;
+        if (!session) {
+            logger.warn(`[${this.config.name}] No session in state — skipping message build`);
+            return {};
+        }
+        const userMessage = await this.buildIncomeMessage(session);
+        return { messages: [userMessage] };
     }
 
     private async executorNode(state: typeof AgentState.State, config: RunnableConfig): Promise<Partial<typeof AgentState.State>> {
@@ -147,11 +168,11 @@ export class FolderAgent extends BaseAgent {
         logger.info(`[${this.config.name}] handling session: ${session.sessionId}`);
 
         try {
-            const userMessage = await this.buildIncomeMessage(session);
             const config: RunnableConfig = {
                 configurable: { thread_id: session.threadId, session },
             };
-            const stream = await this.app.streamEvents({ messages: [userMessage] }, { ...config, version: "v3" });
+            // The incoming message is built inside the graph (messageBuilder node).
+            const stream = await this.app.streamEvents({ session }, { ...config, version: "v3" });
 
             for await (const message of stream.messages) {
                 const text = await message.text;
