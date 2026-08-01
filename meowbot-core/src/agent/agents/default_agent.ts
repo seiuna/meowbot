@@ -8,7 +8,7 @@ import { SessionContext, SessionType } from "@meowbot/gateway/index.types";
 import { modelRegistry } from "@meowbot/llm";
 import { getLogger } from "@meowbot/utils/logs";
 import { checkpointer } from "../checkpointer";
-import { Prompts, SkillRegistry } from "@meowbot/template/prompts";
+import { Prompts, SkillRegistry, Skill } from "@meowbot/template/prompts";
 import { compactThread } from "../thread_manager.js";
 import { messageValidatorNode } from "../message_validator.js";
 import { DynamicStructuredTool, DynamicTool } from "@langchain/core/tools";
@@ -62,7 +62,7 @@ export class DefaultAgent extends BaseAgent {
                 );
             }
             this.skillCache = {
-                tools: skill.tools(),
+                tools: skill instanceof Skill ? skill.tools() : [],
                 prompt: skill.prompt(),
                 fewshot: () => skill.fewshot(),
             };

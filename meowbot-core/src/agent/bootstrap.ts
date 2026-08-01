@@ -6,7 +6,7 @@ const logger = getLogger("AgentBootstrap");
 
 export async function bootstrapAgentRegistry(): Promise<void> {
     // Validate that required utility templates exist
-    const requiredSkills = ["content-filter", "context-compact"];
+    const requiredSkills = ["agent-system", "content-filter", "context-compact"];
     for (const name of requiredSkills) {
         const skill = await SkillRegistry.get(name);
         if (!skill) {
