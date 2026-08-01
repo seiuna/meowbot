@@ -88,6 +88,18 @@ describe("FileSystemToolProvider", () => {
         expect(exists).toBe(false); // nothing was created
     });
 
+    it("write_file patch mode fails when the file does not exist", async () => {
+        const target = path.join(root, "missing", "notes.txt");
+        const res = JSON.parse(
+            await tools.write_file.invoke({ path: target, edits: [{ search: "a", replace: "b" }] }, runConfig()),
+        );
+        expect(res.ok).toBe(false);
+        expect(res.error).toContain("requires an existing file");
+
+        const exists = await fs.stat(target).then(() => true).catch(() => false);
+        expect(exists).toBe(false); // no junk file was created
+    });
+
     it("read_file returns content with line counts", async () => {
         const res = JSON.parse(await tools.read_file.invoke({ path: path.join(root, "src", "app.ts") }, runConfig()));
         expect(res.ok).toBe(true);
@@ -113,6 +125,15 @@ describe("FileSystemToolProvider", () => {
         expect(files.some(f => f.includes("app.ts"))).toBe(true);
         expect(files.some(f => f.includes(".git"))).toBe(false);
         expect(files.some(f => f.includes("node_modules"))).toBe(false);
+    });
+
+    it("search_files glob matching is case-insensitive", async () => {
+        const res = JSON.parse(
+            await tools.search_files.invoke({ root, query: "meowbot", glob: "**/README.MD" }, runConfig()),
+        );
+        expect(res.ok).toBe(true);
+        const files = res.results.map((r: any) => r.file);
+        expect(files.some(f => f.includes("readme.md"))).toBe(true);
     });
 
     it("search_files does not traverse junctions into blacklisted targets", async () => {

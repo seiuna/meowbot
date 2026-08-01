@@ -15,7 +15,7 @@ import { z } from "zod";
 import { DynamicStructuredTool } from "@langchain/core/tools";
 import { defineEnvToolWithThought as defineTool } from "@meowbot/tools/tools";
 import { IToolProvider } from "@meowbot/tools/tool_registry";
-import { getFsAccessControl } from "./access_control.js";
+import { getFsAccessControl, normalizeFsPath } from "./access_control.js";
 import { globToRegex } from "../../utils/glob.js";
 import { getLogger } from "../../utils/logs.js";
 
@@ -161,7 +161,8 @@ const writeFileTool = defineTool(
             "Write or edit a file at an absolute path on this computer. Two modes: " +
             "1) Full write — provide 'content' (and optional 'append') to write/append the entire file. " +
             "2) Patch — provide 'edits' as [{search, replace}] to apply targeted search-and-replace " +
-            "operations in order. Each search string must be found at least once. " +
+            "operations in order. Patch mode requires the file to already exist and each search " +
+            "string must be found at least once. " +
             "Creates parent directories automatically. Pass either 'content' or 'edits', not both.",
         schema: z.object({
             path: z.string().describe("Absolute path of the file to write"),
@@ -199,18 +200,7 @@ const writeFileTool = defineTool(
                 try {
                     current = await fs.readFile(target, "utf-8");
                 } catch {
-                    // File does not exist yet — create it with the first replacement.
-                    if (edits.length > 0) {
-                        const newContent = edits[0].replace;
-                        await fs.mkdir(path.dirname(target), { recursive: true });
-                        await fs.writeFile(target, newContent, "utf-8");
-                        return ok({
-                            file: target,
-                            mode: "patch-create",
-                            edits_applied: 1,
-                        });
-                    }
-                    return fail(`File not found: ${filePath}`);
+                    return fail(`File not found: ${filePath} — patch mode requires an existing file.`);
                 }
 
                 for (const edit of edits) {
@@ -280,10 +270,12 @@ const searchFilesTool = defineTool(
 
             const maxResults = Math.min(max_results ?? 50, MAX_SEARCH_RESULTS);
             const qLower = query.toLowerCase();
-            const globRegex = glob ? globToRegex(glob, process.platform === "win32") : null;
+            const globRegex = glob ? globToRegex(glob, true) : null;
             const results: Array<{ file: string; line: number; content: string }> = [];
 
+            let done = false;
             const walk = async (dir: string): Promise<void> => {
+                if (done) return;
                 let dirents;
                 try {
                     dirents = await fs.readdir(dir, { withFileTypes: true });
@@ -291,7 +283,10 @@ const searchFilesTool = defineTool(
                     return;
                 }
                 for (const entry of dirents) {
-                    if (results.length >= maxResults) return;
+                    if (done || results.length >= maxResults) {
+                        done = true;
+                        return;
+                    }
                     const full = path.join(dir, entry.name);
                     if (!access.check(full).allowed) continue;
                     // Re-verify against the real path so junctions/symlinks
@@ -303,7 +298,7 @@ const searchFilesTool = defineTool(
                     } else if (entry.isFile()) {
                         const ext = entry.name.slice(entry.name.lastIndexOf(".")).toLowerCase();
                         if (SKIP_EXTS.has(ext)) continue;
-                        if (globRegex && !globRegex.test(verified.path.replace(/\\/g, "/"))) continue;
+                        if (globRegex && !globRegex.test(normalizeFsPath(verified.path))) continue;
                         try {
                             const stat = await fs.stat(verified.path);
                             if (stat.size > MAX_READ_SIZE) continue;
