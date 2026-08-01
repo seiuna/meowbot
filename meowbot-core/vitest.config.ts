@@ -34,8 +34,15 @@ export default defineConfig({
     silent: false
   },
   resolve: {
-    alias: {
-      '@meowbot': path.resolve(__dirname, './src')
-    }
+    alias: [
+      {
+        find: '@meowbot/shared',
+        replacement: path.resolve(__dirname, '../packages/shared/dist/index.js')
+      },
+      {
+        find: '@meowbot',
+        replacement: path.resolve(__dirname, './src')
+      }
+    ]
   }
 });

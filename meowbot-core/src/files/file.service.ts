@@ -61,9 +61,6 @@ function detectMime(filePath: string): string {
 
 // ── Image conversion ──
 
-/** Supported target image formats for auto-conversion. Order matters: first is the default fallback. */
-const IMAGE_FORMATS = ["png", "jpeg", "gif", "webp"] as const;
-
 /** MIME type mapping for image formats */
 const FORMAT_MIME = {
     png: "image/png",
@@ -75,16 +72,14 @@ const FORMAT_MIME = {
 type ImageFormat = keyof typeof FORMAT_MIME;
 type ImageMime = typeof FORMAT_MIME[ImageFormat];
 
-function normalizeFormat(raw: string): ImageFormat {
-    const normalized = raw.toLowerCase().replace("jpg", "jpeg");
-    if (IMAGE_FORMATS.includes(normalized as ImageFormat)) return normalized as ImageFormat;
-    return IMAGE_FORMATS[0]; // fallback to first (png)
-}
-
+/** Map an image MIME type (e.g. `image/jpeg`) to a supported format, or null if not an image. */
 function mimeToFormat(mime: string): ImageFormat | null {
+    const normalized = mime.toLowerCase();
     for (const [fmt, m] of Object.entries(FORMAT_MIME)) {
-        if (mime.includes(m)) return fmt as ImageFormat;
+        if (normalized.includes(m)) return fmt as ImageFormat;
     }
+    // Some servers report `image/jpg`
+    if (normalized.includes("image/jpg")) return "jpeg";
     return null;
 }
 
@@ -127,7 +122,20 @@ interface DownloadResult {
     dataUri: string;
     mime: string;
     buffer: Buffer;
+    cachedAt: number;
 }
+
+/** Max entries in the URL download cache */
+const DOWNLOAD_CACHE_MAX_ENTRIES = 50;
+/** Max total bytes held by the URL download cache */
+const DOWNLOAD_CACHE_MAX_BYTES = 64 * 1024 * 1024; // 64 MiB
+/** How long a URL download result is considered fresh */
+const DOWNLOAD_CACHE_TTL_MS = 10 * 60 * 1000; // 10 minutes
+
+/** Max entries in the conversion cache */
+const CONVERT_CACHE_MAX_ENTRIES = 50;
+/** Max total bytes held by the conversion cache */
+const CONVERT_CACHE_MAX_BYTES = 64 * 1024 * 1024; // 64 MiB
 
 // ── FileService ──
 
@@ -139,9 +147,13 @@ export class FileService {
 
     /** Conversion cache: `${sha256(content)}:${targetFormat}` → base64 data URI */
     private convertCache = new Map<string, string>();
+    /** Total bytes held by the conversion cache */
+    private convertCacheBytes = 0;
 
     /** Download cache: URL → DownloadResult (avoids re-downloading) */
     private downloadCache = new Map<string, DownloadResult>();
+    /** Total bytes held by the download cache */
+    private downloadCacheBytes = 0;
 
     private constructor() {}
 
@@ -302,10 +314,15 @@ export class FileService {
             if (!options?.accept?.length) return file.dataUri;
 
             // Original format is in the accept list — return as-is
-            if (options.accept.includes(file.mime as ImageMime)) return file.dataUri;
+            const sourceFormat = mimeToFormat(file.mime);
+            if (sourceFormat && options.accept.includes(FORMAT_MIME[sourceFormat])) return file.dataUri;
 
             // Convert to the first accepted format
-            return this.convertBase64(file.dataUri, normalizeFormat(options.accept[0]));
+            const targetFormat = options.accept
+                .map(mimeToFormat)
+                .find((f): f is ImageFormat => f !== null);
+            if (!targetFormat) return file.dataUri;
+            return this.convertBase64(file.dataUri, targetFormat);
         } catch (error) {
             logger.error(`Failed to get base64 for ${fileId}: ${error}`);
             return null;
@@ -391,6 +408,10 @@ export class FileService {
 
     public clear(): void {
         this.registry.clear();
+        this.downloadCache.clear();
+        this.downloadCacheBytes = 0;
+        this.convertCache.clear();
+        this.convertCacheBytes = 0;
         logger.debug("Cleared all registered files");
     }
 
@@ -410,24 +431,27 @@ export class FileService {
         // URL downloads are cached
         if (fileId.startsWith("http://") || fileId.startsWith("https://")) {
             const cached = this.downloadCache.get(fileId);
-            if (cached) return cached;
+            if (cached && Date.now() - cached.cachedAt < DOWNLOAD_CACHE_TTL_MS) return cached;
+            if (cached) {
+                // Stale entry, drop it before re-downloading
+                this.downloadCache.delete(fileId);
+                this.downloadCacheBytes -= cached.buffer.length;
+            }
 
             try {
                 const resp = await fetch(fileId, {
+                    headers: { "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) MEOWBOT/1.0" },
                     signal: AbortSignal.timeout(30000),
                 });
                 if (!resp.ok) return null;
                 const buffer = Buffer.from(await resp.arrayBuffer());
                 const mime = resp.headers.get("content-type") ?? "application/octet-stream";
                 const dataUri = `data:${mime};base64,${buffer.toString("base64")}`;
-                const result: DownloadResult = { dataUri, mime, buffer };
+                const result: DownloadResult = { dataUri, mime, buffer, cachedAt: Date.now() };
 
-                // Cache (cap at 50 entries)
-                if (this.downloadCache.size >= 50) {
-                    const firstKey = this.downloadCache.keys().next().value;
-                    if (firstKey) this.downloadCache.delete(firstKey);
-                }
                 this.downloadCache.set(fileId, result);
+                this.downloadCacheBytes += buffer.length;
+                this.enforceDownloadCacheLimit();
                 return result;
             } catch {
                 return null;
@@ -438,9 +462,17 @@ export class FileService {
         if (fileId.startsWith("file_")) {
             const entry = this.registry.get(fileId);
             if (!entry) { logger.warn(`File not found: ${fileId}`); return null; }
-            const buffer = await entry.file.toBuffer();
+            // toBase64() is the single source of truth for the real MIME type:
+            // registry meta may be application/octet-stream for adapter files
+            // registered without a filename (e.g. incoming QQ images).
             const dataUri = await entry.file.toBase64();
-            return { dataUri, mime: entry.meta.mimeType, buffer };
+            const mimeMatch = dataUri.match(/^data:([^;]*);base64,/i);
+            const mime = mimeMatch?.[1] ?? entry.meta.mimeType;
+            const base64Match = dataUri.match(/^data:[^;]*;base64,(.+)$/is);
+            const buffer = base64Match
+                ? Buffer.from(base64Match[1], "base64")
+                : await entry.file.toBuffer();
+            return { dataUri, mime, buffer, cachedAt: Date.now() };
         }
 
         // Workspace files
@@ -453,6 +485,7 @@ export class FileService {
                 dataUri: `data:${mime};base64,${buffer.toString("base64")}`,
                 mime,
                 buffer,
+                cachedAt: Date.now(),
             };
         }
 
@@ -514,18 +547,41 @@ export class FileService {
             const outputBuffer = await sharpInstance.toBuffer();
             const result = `data:${targetMime};base64,${outputBuffer.toString("base64")}`;
 
-            // Cache (cap at 50 entries to avoid memory leak)
-            if (this.convertCache.size >= 50) {
-                const firstKey = this.convertCache.keys().next().value;
-                if (firstKey) this.convertCache.delete(firstKey);
-            }
             this.convertCache.set(cacheKey, result);
+            this.convertCacheBytes += result.length;
+            this.enforceConvertCacheLimit();
 
             logger.debug(`Converted image: ${sourceMime} → ${targetMime}`);
             return result;
         } catch (error) {
             logger.warn(`Image conversion failed (${sourceMime} → ${targetFormat}): ${error}, returning original`);
             return dataUri;
+        }
+    }
+
+    private enforceDownloadCacheLimit(): void {
+        while (
+            this.downloadCache.size > DOWNLOAD_CACHE_MAX_ENTRIES ||
+            this.downloadCacheBytes > DOWNLOAD_CACHE_MAX_BYTES
+        ) {
+            const firstKey = this.downloadCache.keys().next().value as string | undefined;
+            if (!firstKey) break;
+            const evicted = this.downloadCache.get(firstKey)!;
+            this.downloadCache.delete(firstKey);
+            this.downloadCacheBytes -= evicted.buffer.length;
+        }
+    }
+
+    private enforceConvertCacheLimit(): void {
+        while (
+            this.convertCache.size > CONVERT_CACHE_MAX_ENTRIES ||
+            this.convertCacheBytes > CONVERT_CACHE_MAX_BYTES
+        ) {
+            const firstKey = this.convertCache.keys().next().value as string | undefined;
+            if (!firstKey) break;
+            const evicted = this.convertCache.get(firstKey)!;
+            this.convertCache.delete(firstKey);
+            this.convertCacheBytes -= evicted.length;
         }
     }
 
