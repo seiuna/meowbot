@@ -51,6 +51,18 @@ describe("SkillRegistry", () => {
         expect(await SkillRegistry.list()).toEqual(["writer", "greet", "analyst"]);
     });
 
+    it("shares a single load across concurrent callers", async () => {
+        SkillRegistry.configure({ skillsDir, templatesDir, promptsDir }); // invalidate cache
+        const [skills, templates, writer] = await Promise.all([
+            SkillRegistry.listSkills(),
+            SkillRegistry.listTemplates(),
+            SkillRegistry.get("writer"),
+        ]);
+        expect(skills).toEqual(["writer"]);
+        expect(templates).toEqual(["greet"]);
+        expect(writer?.prompt()).toBe("You are a writer.");
+    });
+
     it("builds rendered templates and prompts", async () => {
         expect(await SkillRegistry.build("greet", { name: "Codex" })).toBe("Hi Codex");
         expect(await SkillRegistry.build("writer", {})).toBe("You are a writer.");

@@ -74,3 +74,6 @@ export class Template extends BaseSkill {
         return this.prompt(data);
     }
 }
+
+// Backward-compatible type re-exports (deep imports of ./skill.js keep working).
+export type { SkillMeta, FewShotPair, SkillCategory } from "./types.js";

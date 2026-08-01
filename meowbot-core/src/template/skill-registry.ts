@@ -80,42 +80,64 @@ class SkillRegistryStore {
     public async loadPluginSkill(name: string, sourceDir: string, category: SkillCategory = "skill"): Promise<void> {
         const loaded = await loadSingleSkill(sourceDir, category);
         if (!loaded) throw new Error(`No skill.md found in ${sourceDir} (skill "${name}")`);
+        if (loaded.skill.meta.name !== name) {
+            logger.warn(
+                `Plugin skill registered as "${loaded.skill.meta.name}" but requested name was "${name}" — ` +
+                `the frontmatter/folder name wins.`,
+            );
+        }
         for (const err of loaded.errors) {
             logger.warn(`Plugin skill "${name}" load problem: ${err}`);
         }
         await this.registerDynamic(loaded.skill);
     }
 
-    private async ensureLoaded(): Promise<Map<string, BaseSkill>> {
-        if (!this.skills) {
-            this.skills = new Map();
-            this.loadErrors = [];
-            const providers = toolRegistry.getProviders().map(p => p.getName());
+    /** In-flight load promise, so concurrent callers share one load. */
+    private loadPromise: Promise<Map<string, BaseSkill>> | null = null;
 
-            const dirs: Array<[string, SkillCategory]> = [
-                [this.config.skillsDir, "skill"],
-                [this.config.templatesDir, "template"],
-                [this.config.promptsDir, "prompt"],
-            ];
-            for (const [dir, category] of dirs) {
-                const result = await loadSkillDirectory(dir, category, providers);
-                for (const [k, v] of result.skills) this.addLoaded(k, v, "directory");
-                this.loadErrors.push(...result.errors);
-            }
-
-            // Runtime-registered (plugin) skills — lowest priority.
-            for (const [k, v] of this.dynamicSkills) this.addLoaded(k, v, "plugin");
+    private ensureLoaded(): Promise<Map<string, BaseSkill>> {
+        if (this.skills) return Promise.resolve(this.skills);
+        if (!this.loadPromise) {
+            this.loadPromise = this.doLoad()
+                .then(map => {
+                    this.skills = map;
+                    return map;
+                })
+                .finally(() => {
+                    this.loadPromise = null;
+                });
         }
-        return this.skills;
+        return this.loadPromise;
     }
 
-    private addLoaded(name: string, skill: BaseSkill, source: string): void {
-        if (this.skills!.has(name)) {
+    private async doLoad(): Promise<Map<string, BaseSkill>> {
+        const map = new Map<string, BaseSkill>();
+        this.loadErrors = [];
+        const providers = toolRegistry.getProviders().map(p => p.getName());
+
+        const dirs: Array<[string, SkillCategory]> = [
+            [this.config.skillsDir, "skill"],
+            [this.config.templatesDir, "template"],
+            [this.config.promptsDir, "prompt"],
+        ];
+        for (const [dir, category] of dirs) {
+            const result = await loadSkillDirectory(dir, category, providers);
+            for (const [k, v] of result.skills) this.addLoadedTo(map, k, v, "directory");
+            this.loadErrors.push(...result.errors);
+        }
+
+        // Runtime-registered (plugin) skills — lowest priority.
+        for (const [k, v] of this.dynamicSkills) this.addLoadedTo(map, k, v, "plugin");
+        return map;
+    }
+
+    private addLoadedTo(map: Map<string, BaseSkill>, name: string, skill: BaseSkill, source: string): void {
+        if (map.has(name)) {
             logger.warn(`Duplicate skill "${name}" (${source}: ${skill.meta.sourceDir}) ignored`);
             this.loadErrors.push(`Duplicate skill "${name}" (${source})`);
             return;
         }
-        this.skills!.set(name, skill);
+        map.set(name, skill);
     }
 
     /** Filter loaded skills by category. */
@@ -220,6 +242,8 @@ class SkillRegistryStore {
 
     /** Reload all skills (e.g. after file changes). Dynamic skills survive. */
     async reload(): Promise<void> {
+        // Wait for any in-flight load before dropping the cache.
+        if (this.loadPromise) await this.loadPromise.catch(() => {});
         this.skills = null;
         await this.ensureLoaded();
     }

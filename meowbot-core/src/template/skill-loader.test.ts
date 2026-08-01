@@ -38,6 +38,16 @@ describe("loadSkillDirectory", () => {
         expect(skill!.fewShotCount).toBe(1);
     });
 
+    it("does not load few-shot for templates", async () => {
+        const tplDir = path.join(tmp, "templates");
+        await fs.mkdir(path.join(tplDir, "msg"), { recursive: true });
+        await fs.writeFile(path.join(tplDir, "msg", "skill.md"), "---\nname: msg\n---\n\nHello", "utf-8");
+        await fs.writeFile(path.join(tplDir, "msg", "few-shot.json"), JSON.stringify([{ human: "h", ai: "a" }]), "utf-8");
+
+        const result = await loadSkillDirectory(tplDir, "template");
+        expect(result.skills.get("msg")!.fewShotCount).toBe(0);
+    });
+
     it("loads flat .md files", async () => {
         await fs.writeFile(
             path.join(tmp, "flat.md"),
