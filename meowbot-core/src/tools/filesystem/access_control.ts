@@ -39,6 +39,8 @@ export const DEFAULT_BLACKLIST: string[] = [
     "**/.ssh/**",
     "**/.aws",
     "**/.aws/**",
+    "**/.env",
+    "**/.env.*",
     "**/meowbot-core/config",
     "**/meowbot-core/config/**",
     "?:/Windows",
@@ -85,6 +87,8 @@ export function normalizeFsPath(raw: string): string {
     let p = raw.trim();
     // Strip the \\?\ long-path / device prefix on Windows.
     p = p.replace(/^\\\\\?\\/, "");
+    // Extended-length UNC: \\?\UNC\server\share\... -> \\server\share\...
+    if (/^UNC[\\/]/i.test(p)) p = "\\\\" + p.slice(4);
 
     if (/^[A-Za-z]:[\\/]/.test(p)) {
         // Windows-style absolute path (e.g. C:/foo, C:\foo, E:/a/../b).
@@ -100,6 +104,23 @@ export function normalizeFsPath(raw: string): string {
             }
         }
         return rest.length === 0 ? drive + "/" : drive + "/" + rest.join("/");
+    }
+
+    if (/^\\\\/.test(p)) {
+        // UNC path (\\server\share\...): normalize independently of the host
+        // platform — feeding it to path.resolve on POSIX would prepend the cwd.
+        const parts = p.replace(/\\/g, "/").toLowerCase().split("/");
+        const rest: string[] = [];
+        for (const seg of parts.slice(1)) {
+            if (seg === "" || seg === ".") continue;
+            if (seg === "..") {
+                rest.pop();
+            } else {
+                rest.push(seg);
+            }
+        }
+        const joined = "//" + rest.join("/");
+        return joined.length > 2 && joined.endsWith("/") ? joined.slice(0, -1) : joined;
     }
 
     p = path.resolve(p);
@@ -135,7 +156,10 @@ function compileRules(patterns: string[]): PathRule[] {
  * (resolves symlinks/junctions), then append the missing tail.
  */
 export async function resolveExistingAncestor(rawPath: string): Promise<string> {
-    const abs = path.resolve(rawPath);
+    const isWindowsStyle = /^[A-Za-z]:[\\/]/.test(rawPath) || /^\\\\/.test(rawPath);
+    // Never feed Windows-style paths to the POSIX resolver — it would prepend
+    // the cwd. Keep them as-is with forward separators.
+    const abs = isWindowsStyle ? rawPath.replace(/\\/g, "/") : path.resolve(rawPath);
     let probe = abs;
     const tail: string[] = [];
     for (;;) {

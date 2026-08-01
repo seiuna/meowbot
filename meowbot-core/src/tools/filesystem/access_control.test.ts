@@ -36,6 +36,12 @@ describe("default blacklist (empty whitelist)", () => {
         expect(ac.isAllowed("E:/project/meowbot/.git")).toBe(false);
     });
 
+    it("denies .env files by default", () => {
+        expect(ac.isAllowed("E:/project/meowbot/.env")).toBe(false);
+        expect(ac.isAllowed("E:/project/meowbot/.env.local")).toBe(false);
+        expect(ac.isAllowed("E:/project/meowbot/.env.example")).toBe(false);
+    });
+
     it("denies node_modules", () => {
         expect(ac.isAllowed("E:/project/meowbot/node_modules/x/index.js")).toBe(false);
     });
@@ -61,6 +67,18 @@ describe("default blacklist (empty whitelist)", () => {
     it("is case-insensitive for matches", () => {
         expect(ac.isAllowed("c:/windows/system32/x")).toBe(false);
         expect(ac.isAllowed("C:/PROJECT/MEOWBOT/.GIT/HEAD")).toBe(false);
+    });
+
+    it("applies the default blacklist to UNC paths", () => {
+        expect(ac.isAllowed("\\\\server\\share\\proj\\.git\\config")).toBe(false);
+        expect(ac.isAllowed("\\\\server\\share\\proj\\notes.txt")).toBe(true);
+    });
+});
+
+describe("normalizeFsPath — UNC", () => {
+    it("normalizes UNC paths independent of the host platform", () => {
+        expect(normalizeFsPath("\\\\server\\share\\Proj\\a")).toBe("//server/share/proj/a");
+        expect(normalizeFsPath("\\\\?\\UNC\\server\\share\\Proj\\a")).toBe("//server/share/proj/a");
     });
 });
 
@@ -129,12 +147,24 @@ describe("verify()", () => {
         const link = path.join(tmp, "link");
         try {
             await symlink(path.join(tmp, ".git"), link, process.platform === "win32" ? "junction" : "dir");
-        } catch {
-            return; // link creation not permitted in this environment — skip
+        } catch (error: any) {
+            throw new Error("Failed to create symlink/junction for test: " + error.message);
         }
 
         const ac = control();
         const res = await ac.verify(path.join(link, "secret.txt"));
         expect(res.ok).toBe(false);
+    });
+
+    it("denies a real path matching an uppercase pattern on any platform", async () => {
+        const caseTmp = await mkdtemp(path.join(os.tmpdir(), "meowbot-ac-case-"));
+        try {
+            await mkdir(path.join(caseTmp, "Secret"), { recursive: true });
+            const ac = control({ blacklist: ["**/Secret/**"] });
+            const res = await ac.verify(path.join(caseTmp, "Secret", "a.txt"));
+            expect(res.ok).toBe(false);
+        } finally {
+            await rm(caseTmp, { recursive: true, force: true });
+        }
     });
 });
