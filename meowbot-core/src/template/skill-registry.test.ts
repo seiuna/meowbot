@@ -94,9 +94,11 @@ describe("SkillRegistry", () => {
                 {
                     name: "plugin-skill",
                     description: "",
+                    tools: [],
                     requiredProviders: [],
                     asSubAgent: false,
                     category: "skill",
+                    tags: [],
                 },
                 "plugin body",
             ),
