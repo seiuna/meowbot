@@ -18,6 +18,7 @@ import { bootstrapMCPProviders } from "./mcp/index.js";
 import { AppServer } from "./server/index.js";
 import { SubagentToolProvider } from "./tools/subagent/index.js";
 import { WorkspaceToolProvider } from "./workspace/index.js";
+import { FileSystemToolProvider } from "./tools/filesystem/index.js";
 import { SystemToolProvider } from "./tools/system/system_tools.js";
 import { ScheduledToolProvider } from "./tools/scheduled_tools.js";
 import { UserInterventionToolProvider } from "./tools/user/user_tools.js";
@@ -54,6 +55,7 @@ export async function startApp(): Promise<void> {
     toolRegistry.register(new DynamicToolsProvider());
     toolRegistry.register(new SubagentToolProvider());
     toolRegistry.register(new WorkspaceToolProvider());
+    toolRegistry.register(new FileSystemToolProvider());
     toolRegistry.register(new SystemToolProvider());
     toolRegistry.register(new ScheduledToolProvider());
     toolRegistry.register(new UserInterventionToolProvider());

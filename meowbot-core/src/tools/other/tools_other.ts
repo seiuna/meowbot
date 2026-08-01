@@ -3,6 +3,8 @@ import {RunnableConfig} from "@langchain/core/runnables";
 import {createReactiveConfig} from "@meowbot/config";
 import {HumanMessage} from "@langchain/core/messages";
 import {Buffer} from "node:buffer";
+import path from "node:path";
+import {stat} from "node:fs/promises";
 import {getLogger} from "@meowbot/utils/logs";
 import {
     ToolsGlobalConfig,
@@ -10,7 +12,8 @@ import {
 } from "@meowbot/shared";
 import {z} from "zod";
 import { ScreenshotManager } from "../../image_generation/screenshot-manager.js";
-import { getFileService } from "../../files/index.js";
+import { getFileService, type FileService } from "../../files/index.js";
+import { getFsAccessControl } from "../filesystem/access_control.js";
 import { BuilderSource } from "../../image_generation/index.js";
 
 
@@ -253,6 +256,63 @@ export function consumePendingDecoration(config: RunnableConfig | undefined): Pe
     return deco ?? null;
 }
 
+type AttachmentResolution = { ok: true; id: string } | { ok: false; error: string };
+
+/** Max size for files attached via decorate_reply (matches the read_file cap). */
+const MAX_ATTACHMENT_SIZE = 10 * 1024 * 1024;
+
+/**
+ * Resolve a decoration attachment reference to a FileService fileId.
+ *
+ * Supports the existing schemes (`file_*`, `ws/*`, `http(s)://` URLs) and, new,
+ * absolute filesystem paths (e.g. files created with the `write_file` tool).
+ * Absolute paths must pass the filesystem access control (blacklist/whitelist)
+ * before being registered with FileService.
+ */
+async function resolveAttachment(
+    ref: string,
+    fileService: FileService,
+): Promise<AttachmentResolution> {
+    if (
+        ref.startsWith("file_") ||
+        ref.startsWith("ws/") ||
+        ref.startsWith("http://") ||
+        ref.startsWith("https://")
+    ) {
+        return (await fileService.isAvailable(ref))
+            ? { ok: true, id: ref }
+            : { ok: false, error: `File not available: ${ref}` };
+    }
+
+    // Otherwise treat it as an absolute filesystem path.
+    if (!path.isAbsolute(ref)) {
+        return { ok: false, error: `Invalid file reference (expected fileId, URL, or absolute path): ${ref}` };
+    }
+    const verified = await getFsAccessControl().verify(ref);
+    if (!verified.ok) return { ok: false, error: verified.error };
+    // Use the verified path for all subsequent I/O so the actual target matches
+    // the access-control decision (handles symlinks and .. normalization).
+    const filePath = verified.path;
+    try {
+        const info = await stat(filePath);
+        if (!info.isFile()) return { ok: false, error: `Not a regular file: ${filePath}` };
+        if (info.size > MAX_ATTACHMENT_SIZE) {
+            return {
+                ok: false,
+                error: `File too large (${info.size} bytes, max ${MAX_ATTACHMENT_SIZE})`,
+            };
+        }
+    } catch {
+        return { ok: false, error: `File not found: ${filePath}` };
+    }
+    try {
+        const fileId = await fileService.fromLocalPath(filePath);
+        return { ok: true, id: fileId };
+    } catch (error: any) {
+        return { ok: false, error: `Failed to load file: ${error.message}` };
+    }
+}
+
 export const decorateReplyTool = defineEnvToolWithThought(
     {
         name: "decorate_reply",
@@ -263,8 +323,12 @@ export const decorateReplyTool = defineEnvToolWithThought(
         schema: z.object({
             reply: z.string().optional().describe("Message ID to quote/reply to. Use the incoming message's ID."),
             at: z.array(z.string()).optional().describe("User IDs to @mention in group chats."),
-            file: z.array(z.string()).optional().describe("FileService fileIds (ws/... or file_...) or HTTP URLs to attach as files."),
-            image: z.array(z.string()).optional().describe("FileService fileIds (ws/... or file_...) or HTTP URLs to attach as images."),
+            file: z.array(z.string()).optional().describe(
+                "FileService fileIds (ws/... or file_...), HTTP URLs, or absolute filesystem paths to attach as files."
+            ),
+            image: z.array(z.string()).optional().describe(
+                "FileService fileIds (ws/... or file_...), HTTP URLs, or absolute filesystem paths to attach as images."
+            ),
         }),
     },
     async (input, runConfig) => {
@@ -273,18 +337,20 @@ export const decorateReplyTool = defineEnvToolWithThought(
         if (input.at && input.at.length > 0) deco.at = input.at;
         const fs = getFileService();
         if (input.file && input.file.length > 0) {
-            const available = await Promise.all(input.file.map(id => fs.isAvailable(id)));
-            if (available.some(v => !v)) {
-                return JSON.stringify({ ok: false, error: "Some files are not available.", files: input.file });
+            const resolved = await Promise.all(input.file.map(ref => resolveAttachment(ref, fs)));
+            const failure = resolved.find((r): r is { ok: false; error: string } => !r.ok);
+            if (failure) {
+                return JSON.stringify({ ok: false, error: failure.error, files: input.file });
             }
-            deco.file = input.file;
+            deco.file = resolved.map(r => (r as { ok: true; id: string }).id);
         }
         if (input.image && input.image.length > 0) {
-            const available = await Promise.all(input.image.map(id => fs.isAvailable(id)));
-            if (available.some(v => !v)) {
-                return JSON.stringify({ ok: false, error: "Some images are not available.", images: input.image });
+            const resolved = await Promise.all(input.image.map(ref => resolveAttachment(ref, fs)));
+            const failure = resolved.find((r): r is { ok: false; error: string } => !r.ok);
+            if (failure) {
+                return JSON.stringify({ ok: false, error: failure.error, images: input.image });
             }
-            deco.image = input.image;
+            deco.image = resolved.map(r => (r as { ok: true; id: string }).id);
         }
 
         if (Object.keys(deco).length === 0) {
