@@ -113,6 +113,10 @@ export function buildSkillMeta(
         normalized.asSubAgent = !["false", "no", "0"].includes(v);
     }
 
+    // `category` / `sourceDir` are derived by the loader; do not allow frontmatter to override them.
+    delete normalized.category;
+    delete normalized.sourceDir;
+
     const result = SkillMetaSchema.safeParse({ ...fallback, ...normalized });
     if (result.success) return { meta: result.data, errors };
 
