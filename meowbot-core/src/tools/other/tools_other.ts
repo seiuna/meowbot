@@ -287,14 +287,17 @@ async function resolveAttachment(
     }
     const verified = await getFsAccessControl().verify(ref);
     if (!verified.ok) return { ok: false, error: verified.error };
+    // Use the verified path for all subsequent I/O so the actual target matches
+    // the access-control decision (handles symlinks and .. normalization).
+    const filePath = verified.path;
     try {
-        const info = await stat(ref);
-        if (!info.isFile()) return { ok: false, error: `Not a regular file: ${ref}` };
+        const info = await stat(filePath);
+        if (!info.isFile()) return { ok: false, error: `Not a regular file: ${filePath}` };
     } catch {
-        return { ok: false, error: `File not found: ${ref}` };
+        return { ok: false, error: `File not found: ${filePath}` };
     }
     try {
-        const fileId = await fileService.fromLocalPath(ref);
+        const fileId = await fileService.fromLocalPath(filePath);
         return { ok: true, id: fileId };
     } catch (error: any) {
         return { ok: false, error: `Failed to load file: ${error.message}` };
