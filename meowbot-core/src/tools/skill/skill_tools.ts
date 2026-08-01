@@ -10,12 +10,10 @@ import { DynamicStructuredTool } from "@langchain/core/tools";
 import { defineEnvToolWithThought as defineTool } from "@meowbot/tools/tools.js";
 import { IToolProvider } from "@meowbot/tools/tool_registry.js";
 import { SkillRegistry } from "@meowbot/template/prompts.js";
-import { getVectorRetriever } from "@meowbot/vector/index.js";
-import { EmbeddingService } from "@meowbot/vector/embeddings.js";
 import { getLogger } from "@meowbot/utils/logs.js";
+import { searchSkills } from "./skill_search.js";
 
 const logger = getLogger("SkillTools");
-const embedSvc = EmbeddingService.getInstance();
 
 // ── search_skill ──
 
@@ -31,53 +29,14 @@ const searchSkillTool = defineTool(
         }),
     },
     async ({ query }) => {
-        const skills = await SkillRegistry.listSkills();
-        const results: Array<{ name: string; description: string; providers: string[]; tools: string[]; score?: number }> = [];
-
-        // Try vector search first if enabled
-        if (embedSvc.isEnabled) {
-            try {
-                const retriever = getVectorRetriever();
-                const hits = await retriever.searchSkills(query, 20);
-                // Filter hits that match skill names
-                for (const hit of hits) {
-                    const meta = await SkillRegistry.getMeta(hit.docId.replace("skill:", ""));
-                    if (meta && meta.category === "skill") {
-                        results.push({
-                            name: meta.name,
-                            description: meta.description,
-                            providers: meta.requiredProviders,
-                            tools: meta.tools,
-                            score: Math.round(hit.score * 100) / 100,
-                        });
-                    }
-                    if (results.length >= 10) break;
-                }
-                if (results.length > 0) {
-                    return JSON.stringify({ ok: true, query, count: results.length, mode: "vector", skills: results });
-                }
-            } catch (e) {
-                logger.debug(`Skill vector search failed: ${e}`);
-            }
-        }
-
-        // Text match fallback
-        const q = query.toLowerCase();
-        for (const name of skills) {
-            const meta = await SkillRegistry.getMeta(name);
-            if (!meta) continue;
-            const matchName = name.toLowerCase().includes(q);
-            const matchDesc = (meta.description || "").toLowerCase().includes(q);
-            if (!matchName && !matchDesc) continue;
-            results.push({
-                name: meta.name,
-                description: meta.description,
-                providers: meta.requiredProviders,
-                tools: meta.tools,
-            });
-        }
-
-        return JSON.stringify({ ok: true, query, count: results.length, mode: "text", skills: results });
+        const result = await searchSkills(query);
+        return JSON.stringify({
+            ok: true,
+            query: result.query,
+            count: result.results.length,
+            mode: result.mode,
+            skills: result.results,
+        });
     },
 );
 
