@@ -70,11 +70,38 @@ export type FsAccessResult =
     | { ok: true; path: string }
     | { ok: false; error: string };
 
-/** Normalize a real path for matching: resolve, forward slashes, lowercase drive letter, strip trailing slash. */
+/**
+ * Normalize a real path for matching.
+ *
+ * Windows-style absolute paths (`C:/...`, `C:\...`, `\\?\C:\...`) are
+ * normalized independently of the host platform — a drive-letter path is a
+ * Windows path no matter where the process runs, so matching stays consistent
+ * (case-insensitive, `..` collapsed, forward slashes).
+ *
+ * Host-native absolute paths are resolved with `path.resolve()` and normalized
+ * the same way.
+ */
 export function normalizeFsPath(raw: string): string {
     let p = raw.trim();
     // Strip the \\?\ long-path / device prefix on Windows.
     p = p.replace(/^\\\\\?\\/, "");
+
+    if (/^[A-Za-z]:[\\/]/.test(p)) {
+        // Windows-style absolute path (e.g. C:/foo, C:\foo, E:/a/../b).
+        const parts = p.replace(/\\/g, "/").toLowerCase().split("/");
+        const drive = parts[0];
+        const rest: string[] = [];
+        for (const seg of parts.slice(1)) {
+            if (seg === "" || seg === ".") continue;
+            if (seg === "..") {
+                rest.pop();
+            } else {
+                rest.push(seg);
+            }
+        }
+        return rest.length === 0 ? drive + "/" : drive + "/" + rest.join("/");
+    }
+
     p = path.resolve(p);
     p = p.replace(/\\/g, "/");
     if (/^[A-Za-z]:/.test(p)) {
