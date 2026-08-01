@@ -41,8 +41,8 @@ export const DEFAULT_BLACKLIST: string[] = [
     "**/.aws/**",
     "**/meowbot-core/config",
     "**/meowbot-core/config/**",
-    "C:/Windows",
-    "C:/Windows/**",
+    "?:/Windows",
+    "?:/Windows/**",
     "/etc",
     "/etc/**",
     "/proc",
@@ -116,18 +116,17 @@ export function normalizeFsPath(raw: string): string {
 function normalizePattern(raw: string): string {
     let p = raw.trim();
     p = p.replace(/\\/g, "/");
-    if (process.platform === "win32" || /^[A-Za-z]:/.test(p)) {
-        p = p.toLowerCase();
-    }
     if (p.length > 1 && p.endsWith("/")) p = p.slice(0, -1);
     return p;
 }
 
 function compileRules(patterns: string[]): PathRule[] {
-    const caseInsensitive = process.platform === "win32";
     return patterns.map(pattern => ({
         pattern,
-        regex: globToRegex(normalizePattern(pattern), caseInsensitive),
+        // Matching is always case-insensitive, independent of the host platform:
+        // paths are normalized to lowercase for drive-style paths and the regex
+        // gets the `i` flag, so rules behave identically on Windows and Linux.
+        regex: globToRegex(normalizePattern(pattern), true),
     }));
 }
 

@@ -1,12 +1,15 @@
 /**
  * Simple glob → RegExp converter.
  *
- * Supports: ** (any depth), * (single segment), ? (single char), {a,b} (alternation).
+ * Supports: ** (zero or more path segments), * (single segment), ? (single char),
+ * {a,b} (alternation). With `caseInsensitive`, the glob is lowercased and the
+ * resulting RegExp is case-insensitive.
  *
  * Originally extracted from `workspace/workspace_tools.ts` so that the Workspace
  * tools and the FileSystem tools share identical pattern semantics.
  */
 export function globToRegex(glob: string, caseInsensitive = false): RegExp {
+    if (caseInsensitive) glob = glob.toLowerCase();
     let pattern = "";
     let i = 0;
 
@@ -14,11 +17,12 @@ export function globToRegex(glob: string, caseInsensitive = false): RegExp {
         const ch = glob[i];
 
         if (ch === "*" && glob[i + 1] === "*") {
-            // ** matches any number of path segments (including zero)
-            // Match the preceding / if present
-            if (pattern.endsWith("\\/")) {
-                pattern = pattern.slice(0, -2); // remove trailing \/
-                pattern += "(?:\\/.*)?";
+            // ** matches zero or more path segments. When it follows a '/',
+            // the slash is consumed and the group becomes optional, so that
+            // e.g. `a/**/b` also matches `a/b` and `dir/**` matches `dir`.
+            if (pattern.endsWith("/")) {
+                pattern = pattern.slice(0, -1); // remove the '/'
+                pattern += "(?:/.*)?";
             } else {
                 pattern += ".*";
             }

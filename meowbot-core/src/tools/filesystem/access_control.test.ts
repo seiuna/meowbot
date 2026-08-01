@@ -48,6 +48,11 @@ describe("default blacklist (empty whitelist)", () => {
         expect(ac.isAllowed("C:/Windows/System32/drivers/etc/hosts")).toBe(false);
     });
 
+    it("denies Windows dirs on any drive", () => {
+        expect(ac.isAllowed("D:/Windows/System32/x")).toBe(false);
+        expect(ac.isAllowed("C:/Windows/System32/x")).toBe(false);
+    });
+
     it("denies home secrets", () => {
         expect(ac.isAllowed("C:/Users/me/.ssh/id_rsa")).toBe(false);
         expect(ac.isAllowed("C:/Users/me/.aws/credentials")).toBe(false);
@@ -80,6 +85,13 @@ describe("whitelist behavior", () => {
         expect(ac.isAllowed("E:/project/meowbot/private/x.txt")).toBe(false);
         expect(ac.isAllowed("E:/project/meowbot/src/x.txt")).toBe(true);
         expect(ac.isAllowed("E:/project/meowbot/.git/x")).toBe(false); // default still applies
+    });
+
+    it("matches uppercase non-drive patterns case-insensitively on any platform", () => {
+        const ac = control({ blacklist: ["**/Secret/**"] });
+        expect(ac.isAllowed("E:/project/meowbot/Secret/a.txt")).toBe(false);
+        expect(ac.isAllowed("e:/project/meowbot/secret/a.txt")).toBe(false);
+        expect(ac.isAllowed("E:/project/meowbot/src/a.ts")).toBe(true);
     });
 });
 
