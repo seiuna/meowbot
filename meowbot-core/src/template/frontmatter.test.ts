@@ -37,6 +37,13 @@ You are a test skill.
         expect(doc.error).toBeTruthy();
         expect(typeof doc.body).toBe("string");
     });
+
+    it("recognizes a closing delimiter without a trailing newline", () => {
+        const doc = parseFrontmatter("---\nname: eof-skill\n---");
+        expect(doc.error).toBeUndefined();
+        expect(doc.meta.name).toBe("eof-skill");
+        expect(doc.body).toBe("");
+    });
 });
 
 describe("buildSkillMeta", () => {
@@ -70,5 +77,13 @@ describe("buildSkillMeta", () => {
         );
         expect(errors.length).toBeGreaterThan(0);
         expect(meta.requiredProviders).toEqual(["Workspace"]);
+    });
+
+    it("warns on unknown frontmatter keys", () => {
+        const { errors } = buildSkillMeta(
+            { "requried-providers": "Workspace" },
+            { name: "s", category: "skill" },
+        );
+        expect(errors.some(e => e.includes("unknown frontmatter key"))).toBe(true);
     });
 });

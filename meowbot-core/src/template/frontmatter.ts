@@ -21,11 +21,12 @@ export function parseFrontmatter(raw: string): FrontmatterDoc {
     const normalized = raw.replace(/\r\n/g, "\n").replace(/^\uFEFF/, "");
     if (!normalized.startsWith("---\n")) return { meta: {}, body: normalized };
 
-    const endIdx = normalized.indexOf("\n---\n", 4);
-    if (endIdx === -1) return { meta: {}, body: normalized };
+    // Closing delimiter may be followed by a newline OR end-of-file.
+    const match = normalized.match(/^---\n([\s\S]*?)\n---(?:\n|$)/);
+    if (!match) return { meta: {}, body: normalized };
 
-    const header = normalized.slice(4, endIdx);
-    const body = normalized.slice(endIdx + 5).trim();
+    const header = match[1];
+    const body = normalized.slice(match[0].length).trim();
 
     let meta: Record<string, unknown> = {};
     let error: string | undefined;
@@ -62,6 +63,17 @@ export function buildSkillMeta(
 ): MetaBuildResult {
     const errors: string[] = [];
     const normalized: Record<string, unknown> = { ...raw };
+
+    // Warn on unknown keys so typos like "requried-providers" surface.
+    const KNOWN_KEYS = new Set([
+        "name", "description", "requiredProviders", "required-providers",
+        "asSubAgent", "as-sub-agent", "category", "version", "tags", "sourceDir",
+    ]);
+    for (const key of Object.keys(raw)) {
+        if (!KNOWN_KEYS.has(key)) {
+            errors.push(`unknown frontmatter key "${key}" (ignored)`);
+        }
+    }
 
     if (normalized.requiredProviders === undefined && normalized["required-providers"] !== undefined) {
         normalized.requiredProviders = normalized["required-providers"];
